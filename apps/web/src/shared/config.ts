@@ -2,13 +2,24 @@
 // measured result (design doc §14). Faction modifiers are public and budget-neutral by intent.
 
 export const RULES_VERSION = 'r1.0.0-sandbox';
-export const SAVE_VERSION = 5;
+export const SAVE_VERSION = 6;
 
 export const TICK_HZ = 5;
 export const TICK_MS = 200;
 
-export const MAP_W = 64;
-export const MAP_H = 64;
+// Full launch-target theatre (design doc §3.2): 128 x 128 hexes in 16 x 16 chunks. The world starts with the
+// central 64 x 64 (MVP size) open and unlocks frontier chunks over time, up to this bounded budget.
+export const MAP_W = 128;
+export const MAP_H = 128;
+export const CHUNK = 16;
+
+export const FRONTIER = {
+  initialMin: 2, // initially open chunk range (inclusive) on both axes: chunks 2..5 = tiles 32..95
+  initialMax: 5,
+  firstAt: 6000, // first expansion after 20 simulation minutes
+  interval: 6000, // then every 20 simulation minutes
+  perEvent: 4, // one chunk per quadrant, mirrored, so expansion stays balanced
+} as const;
 
 // ---------------------------------------------------------------- clocks (in ticks)
 // Sandbox compression: the doc's 6 h campaign / 7 day chapter are compressed so a viewer can see
@@ -33,8 +44,10 @@ export const CLOCK = {
 } as const;
 
 export const POP = {
-  ACTIVE_CAP: 12,
-  FACTION_CAP: 3,
+  ACTIVE_CAP: 12, // with the initial 16 chunks; grows by 1 per 4 chunks opened, up to ACTIVE_MAX
+  ACTIVE_MAX: 24, // launch target (§14)
+  FACTION_CAP: 3, // grows by 1 per 12 chunks opened, up to FACTION_MAX
+  FACTION_MAX: 6,
   RESERVE_CAP: 8,
   SQUADS_PER_CMD: 16,
   MUSTER_MAX: 2,

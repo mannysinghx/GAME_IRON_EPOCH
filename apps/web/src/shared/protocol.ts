@@ -13,10 +13,26 @@ export const FX = { SHOT: 1, SHELL: 2, IMPACT: 3, DEATH: 4, CAPTURE: 5, BUILT: 6
 
 export interface SiteInfo { id: number; kind: number; tile: number; name: string }
 
+/**
+ * Static theatre description. Inside [0,w) x [0,h) use these arrays. Outside the theatre, the renderer draws
+ * endless non-simulated scenery from shared/terrain.ts: sampleBaseTerrain(seed, c, r) and
+ * isRiver(riverParams(seed, w, h), c, r) — the generator uses the same functions, so there is no seam.
+ * `active` marks unlocked frontier chunks (1 = open to play); locked tiles are visible land but impassable.
+ */
 export interface MapStatic {
   w: number; h: number; seed: number; worldId: string; rulesVersion: string;
   terrain: Uint8Array; elev: Uint8Array; variant: Uint8Array;
   sites: SiteInfo[];
+  active: Uint8Array;
+  chunk: number;
+}
+
+/** Sent when frontier chunks open: the new active mask and the full current site list (new sites appear). */
+export interface FrontierMsg { type: 'frontier'; active: Uint8Array; sites: SiteInfo[]; opened: number[]; version: number }
+
+export interface FrontierView {
+  open: number; total: number; nextTick: number; done: boolean; lastOpened: string[];
+  activeCap: number; factionCap: number;
 }
 
 export interface FrameMsg {
@@ -154,6 +170,7 @@ export interface UiSnapshot {
   proving: ProvingView;
   battles: { tile: number; intensity: number }[];
   narrative: string[];
+  frontier: FrontierView;
 }
 
 // ------------------------------------------------------------------ dossier
@@ -210,4 +227,5 @@ export type WorkerMsg =
   | { type: 'dossier'; d: Dossier | null }
   | { type: 'toast'; level: 'ok' | 'warn' | 'err' | 'info'; text: string }
   | { type: 'evalRequest'; match: EvalMatch }
+  | FrontierMsg
   | { type: 'ready'; resumed: boolean };
