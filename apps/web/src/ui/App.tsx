@@ -4,7 +4,7 @@ import { ThreeRenderer } from '../render/three/ThreeRenderer.ts';
 import { Bottom, Chronicle } from './Bottom.tsx';
 import { attachRenderer, camera } from './cameraBridge.ts';
 import { Icon, LogoMark } from './icons.tsx';
-import { Commanders, Diplomacy, Factions, LeftPanel, Schedule, Teams, Theatre } from './LeftPanel.tsx';
+import { Commanders, Diplomacy, Factions, LeftPanel, Rivalries, Schedule, Teams, Theatre } from './LeftPanel.tsx';
 import { MapHud } from './MapHud.tsx';
 import { DossierPanel, Operation, Predictions, RightPanel } from './RightPanel.tsx';
 import { store, useStore, type MobileTab } from './store.ts';
@@ -116,6 +116,11 @@ export function App() {
       const op = s.ui.operation ?? s.ui.nextOperation;
       r.opInfo = op ? { code: op.code, status: op.status, center: op.regionCenter, radius: op.radius } : null;
       r.battles = s.ui.battles;
+      // public intents; a fog view shows only the viewing faction's own, as its agents would know them
+      const fogF = s.overlays.fog;
+      r.intents = s.ui.commanders.filter((c) => c.status === 'active' && c.plan && (fogF < 0 || c.faction === fogF))
+        .map((c) => ({ id: c.plan!.id, owner: c.id, faction: c.faction, tile: c.plan!.targetTile, kind: c.plan!.kind, name: c.name }));
+      r.focus = s.ui.story?.focus ?? [];
     }
     const d = s.dossier;
     r.plan = d && d.id === s.selected ? {
@@ -240,7 +245,7 @@ function MobileSheet({ ui, tab }: { ui: NonNullable<typeof store.ui>; tab: Mobil
   return (
     <div class="mobile-sheet">
       {tab === 'theatre' && <><Theatre ui={ui} /><Factions ui={ui} /><Diplomacy ui={ui} /><Schedule ui={ui} /></>}
-      {tab === 'commanders' && <><Commanders ui={ui} /><Teams ui={ui} /></>}
+      {tab === 'commanders' && <><Commanders ui={ui} /><Rivalries ui={ui} /><Teams ui={ui} /></>}
       {tab === 'operation' && <Operation ui={ui} />}
       {tab === 'predict' && <Predictions ui={ui} />}
       {tab === 'dossier' && <DossierPanel ui={ui} d={store.dossier} />}
@@ -274,7 +279,7 @@ function Help({ onClose, onGuide }: { onClose: () => void; onGuide: () => void }
   const keys: [string, string][] = [
     ['Drag', 'Pan the map'], ['Right-drag · Shift-drag', 'Rotate and tilt'], ['Wheel · pinch', 'Zoom'], ['Double-click', 'Fly to point'],
     ['← ↑ → ↓', 'Pan'], ['Q / E', 'Rotate left / right'], ['Z / C', 'Tilt up / down'], ['+ / −', 'Zoom in / out'], ['0', 'Fit theatre'], ['N', 'North up'],
-    ['F', 'Follow selected commander'], ['O', 'Operation camera'], ['D', 'Director camera (hottest battle)'], ['G', 'Free camera'],
+    ['F', 'Follow selected commander'], ['O', 'Operation camera'], ['D', 'Director camera (biggest story, else hottest battle)'], ['G', 'Free camera'],
     ['Space', 'Pause / resume'], ['1 – 6', 'Speed 1× … 32×'], ['[ / ]', 'Previous / next commander'], ['V', 'Cycle fog-of-war view'], ['?', 'Toggle this help'],
   ];
   return (
@@ -293,6 +298,8 @@ function Help({ onClose, onGuide }: { onClose: () => void; onGuide: () => void }
             <p>The world opens at 64 × 64 hexes. Every 20 simulated minutes one chunk per quadrant unlocks, mirrored for balance, until the 128 × 128 launch theatre is open. Locked land sits behind an amber boundary; each unlock adds sites and room for more commanders.</p>
             <h3>Agents</h3>
             <p>Each commander runs a decision hierarchy: tactical rules every 200 ms tick, operational squad assignment every 3 s, and a strategic review every 60–120 s (or after major events, quota-limited). The strategic layer scores 4–8 legal candidate plans with a doctrine utility baseline plus a learned linear value head that updates online from each plan's advantage over the commander's own average, shared across its faction. In paired tests it measurably improves the sites and territory a commander holds. There is no language model and no remote inference.</p>
+            <h3>Story layer</h3>
+            <p>Every plan a commander commits to is announced on the map (a pulsing ring and a name chip at its target) and in the ticker, with the plan it was chosen over; when the next review closes it, the verdict follows: ✔ objective met with a positive reward, ≈ met at a net cost, ✘ not met. Rule-based detectors turn events into ranked moments (core falls, last stands, sites that keep changing hands, upsets, comebacks, streaks) and head-to-head records into named rivalries. The Director camera cuts to the biggest fresh moment. All of it is read-only presentation: it never feeds an agent or changes the war.</p>
             <h3>Self-learning world</h3>
             <p>Three distinct mechanisms: bounded memory (route failures, opponent tendencies, plan outcomes), online value learning (new policy versions every 8 updates), and lineage (veteran sponsors pay merit for descendants with small, recorded doctrine mutations). Skill is measured separately in equal-budget proving-ground duels.</p>
             <h3>Fairness & honesty</h3>

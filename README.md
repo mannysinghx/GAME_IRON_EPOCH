@@ -31,6 +31,12 @@ and raise successors. Then you predict how their operations end, using free play
   tracers and explosions. Endless streamed terrain continues beyond the edge.
 - **An expanding frontier.** The war starts on the central 64 × 64 hexes. Every 20 simulated minutes four mirrored
   16 × 16 chunks open, each with new sites and a wave of new commanders, until the 128 × 128 launch theatre is full.
+- **A story you can follow.**
+  - Every plan a commander commits to is announced on the map and in the ticker, with the plan it was chosen over.
+    The next review shows whether it worked.
+  - Rule-based detectors rank the war's moments: core falls and revenge, last stands, sites that keep changing hands,
+    upsets, photo finishes, comebacks, streaks. Big ones flash on the map and steer the Director camera.
+  - Head-to-head records turn into named rivalries.
 - **A metric-dense spectator UI.** Live metrics run down both sides of the screen:
   - faction power, territory, supply and unit mix;
   - diplomacy and commander leaderboards;
@@ -82,17 +88,19 @@ The build is fully static, so `apps/web/dist` can be hosted on any static file s
    - separate records for world power, skill, merit and reliability.
 3. **Predict.** Stake Signal credits on an operation before its market closes. Settlement is pari-mutuel, and you
    get a receipt.
+4. **Follow the story.** Watch the ticker and the Story tab for plans and their verdicts, and the Rivalries panel for
+   who has the upper hand. Press `D` and the Director camera cuts to the biggest fresh moment.
 
 ### What is on screen
 
 | Area | Contents |
 | --- | --- |
 | Top bar | Live state, chapter · campaign · operation phase, simulation clock, speed, tick and rolling state hash, sim ticks/s and FPS, Signal balance, **GAME STRATEGY** |
-| Left column | 01 Theatre and frontier · 02 Factions · 03 Diplomacy · 04 Commander standings · 05 Team headquarters · 06 Published schedule and weather |
+| Left column | 01 Theatre and frontier · 02 Factions · 03 Diplomacy · 04 Commander standings · 05 Team headquarters · 06 Published schedule and weather · 10 Rivalries |
 | Battlefield | 3D hex terrain, territory tint, glowing front lines, amber frontier edge, sealed operation zone, units, structures and effects, plus the overlays below |
-| Battlefield overlays | Per-faction fog-of-war view with last-known enemies, the selected agent's plan arrow and danger memory, minimap, camera dial, tooltips |
+| Battlefield overlays | Per-faction fog-of-war view with last-known enemies, the selected agent's plan arrow and danger memory, every commander's announced target (a pulse and name chip when new), story headlines, story ticker, minimap, camera dial, tooltips |
 | Right column | 07 Featured operation · 08 Prediction desk · 09 Agent dossier |
-| Bottom strip | Chronicle · Analytics · Proving ground · Engine · Ledger |
+| Bottom strip | Chronicle · Story (plan board, moments, plan success by kind) · Analytics · Proving ground · Engine · Ledger |
 
 ### Controls
 
@@ -103,7 +111,7 @@ The build is fully static, so `apps/web/dist` can be hosted on any static file s
 | Wheel / pinch | zoom | Z / C | tilt |
 | Double-click | fly to a point | + / − · 0 | zoom · fit theatre |
 | Click | select a squad and its commander | N | face north |
-| Minimap | click or drag to move there | F · O · D · G | follow · operation · director · free camera |
+| Minimap | click or drag to move there | F · O · D · G | follow · operation · director (story first) · free camera |
 | Camera dial | north, rotate, tilt, Top / Oblique / Low presets | Space · 1–6 | pause · speed 1×–32× |
 | | | [ ] · V · ? | cycle commanders · fog-of-war view · help |
 
@@ -186,6 +194,36 @@ earned only in a second worker, the proving ground, which runs equal-budget, sid
 There is **no language model** and no remote inference. Explanations in the UI come from accepted plan IDs and
 observed features, not generated reasoning.
 
+## The story layer
+
+`src/sim/story.ts` turns committed events into things a watcher can follow. It is presentation only: it reads the
+simulation and writes its own bounded records, uses no randomness, and nothing in the simulation reads it back. Its
+texts state accepted plan IDs, observed facts and results, never invented intentions.
+
+- **Plan announcements.** Every strategic review is announced with the runner-up it was chosen over and the score
+  margin. When the next review closes the plan, it gets a verdict next to the learner's own reward:
+  - ✔ objective met with a positive reward;
+  - ≈ objective met at a net cost;
+  - ✘ objective not met.
+
+  Per-commander records and streaks, and success rates per plan kind, follow from these.
+- **Moments.** Rule-based detectors, each with a weight for how big the story is:
+  - core falls, and revenge for the commander's own fall or a parent's;
+  - last stands, and ordered assaults on a core;
+  - sites changing hands again and again, and retakes;
+  - upsets against the betting pool, photo finishes and lead changes in operations;
+  - faction lead changes and comebacks;
+  - pacts, notices, and the first blood after a pact ends;
+  - long streaks and slumps, and new rivalries.
+
+  Moments go into the chronicle under `story`. Weight 60 and above flashes a headline on the map, and the Director
+  camera cuts to the best fresh moment before falling back to the hottest battle.
+- **Rivalries.** Each commander pair keeps a head-to-head score: kills + 4 × sites taken + 15 × cores felled + 6 ×
+  operations finished ahead. It is counted in clashes, and the rivalry is named once both sides hold a real share.
+
+Snapshots carry the story records as an optional field. Worlds saved before it resume with an empty story, so no saved
+world is discarded.
+
 ## Measured
 
 These numbers were measured headless in Node with this repository's code: 3 seeds × one simulated campaign for
@@ -211,6 +249,11 @@ Brackets are seed-level 95% confidence intervals.
 **Determinism.** Identical seeds give identical state hashes. Saving, restoring and running 500 more ticks reproduces
 the exact state, including after a frontier opening.
 
+**Story layer.** The same seed run with the story layer on and off ends with identical state hashes, and the story
+records also survive save and restore. Over 5 seeds × 60 simulated minutes it produced about 2.4 moments per simulated
+minute. Captures of neutral sites succeeded 59% of the time and attacks on held sites 35%. Tick cost was unchanged
+within noise.
+
 ## Architecture
 
 ```mermaid
@@ -229,8 +272,8 @@ flowchart LR
 apps/web/src/
   shared/   published rules (config), hex math, seeded RNG and SHA-256, seamless infinite terrain field, worker protocol
   sim/      world (tick loop, combat, line of sight, supply, economy, frontier), agents (planner, learner, memory),
-            society (musters, lineage, teams, treaties, weather), operations, market, ledger, persistence,
-            view builders, world worker, proving-ground worker, selftest
+            society (musters, lineage, teams, treaties, weather), operations, market, ledger, story layer,
+            persistence, view builders, world worker, proving-ground worker, selftest
   render/   api.ts (renderer contract) and three/ (terrain, scenery, structures, units, effects, overlays, labels, camera)
   ui/       Preact app, panels, Game Strategy guide, charts, store, styles
 ```
@@ -262,6 +305,8 @@ Issues and pull requests are welcome. A few ground rules keep the game honest:
 - Keep the simulation deterministic: no `Math.random`, no wall-clock time and no iteration over unordered state
   inside `src/sim`. Visual randomness belongs in `src/render`.
 - Never let spectator input reach agent decisions. Agents observe only their own faction's fog-filtered view.
+- Keep the story layer (`src/sim/story.ts`) read-only: it may read the simulation, but nothing in the simulation may
+  read it back.
 - No external services in the browser: no CDNs, analytics or remote APIs.
 - Files under `src/sim` and `src/shared` import local modules with the `.ts` extension, because the self-tests run
   them directly in Node.

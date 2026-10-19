@@ -424,6 +424,7 @@ export function runStrategic(w: World, c: Commander, trigger: string): void {
     candidates: cands, reason, posture, reserve, explored, fallback, reward: null,
   });
   if (c.decisions.length > DECISION_LOG) c.decisions.length = DECISION_LOG;
+  w.story?.onDecision(w, c, cands, order, chosen);
   c.lastReview = w.tick;
   // the world staggers reviews by commander so the load spreads; duels give both sides the identical schedule so a
   // commander's id cannot tilt an equal-budget skill rating
@@ -512,6 +513,7 @@ function finishPlan(w: World, c: Commander): void {
   const reward = Math.tanh(gains / dur + bonus);
   const rec = c.decisions.find((d) => d.id === p.decisionId);
   if (rec) rec.reward = Math.round(reward * 1000) / 1000;
+  w.story?.onPlanClosed(w, c, p, achieved, reward);
   if (w.learning) {
     const adv = reward - c.rewardEma;
     const err = learnStep(c, p.psi, adv, 1);

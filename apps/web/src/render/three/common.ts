@@ -12,6 +12,8 @@ export const SQRT3 = Math.sqrt(3);
 export const NEUTRAL_HEX = 0x8a93a2;
 export const WATER_TOP = 0.14;
 export const GROUND_Y = 0.75; // representative ground height for camera targets and ray fallbacks
+/** A newly announced intent pulses and carries a name label for this long (wall clock, any playback speed). */
+export const INTENT_FRESH_MS = 9000;
 
 /** Neighbour direction (E, NE, NW, W, SW, SE) -> index of the hex edge (corner e to e+1) it crosses. */
 export const DIR_EDGE: readonly number[] = [1, 0, 5, 4, 3, 2];

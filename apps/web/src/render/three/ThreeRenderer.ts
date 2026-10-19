@@ -13,12 +13,12 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { CHUNK } from '../../shared/config.ts';
 import { STRUCT_ID_BASE, type FrameMsg, type MapStatic, type SiteInfo } from '../../shared/protocol.ts';
 import {
-  DEFAULT_OVERLAYS, type BattleView, type CameraMode, type CameraPreset, type CameraState, type MinimapData, type Overlays,
-  type PickInfo, type PlanOverlay,
+  DEFAULT_OVERLAYS, type BattleView, type CameraMode, type CameraPreset, type CameraState, type FocusPoint, type IntentOverlay,
+  type MinimapData, type Overlays, type PickInfo, type PlanOverlay,
 } from '../api.ts';
 import { POINT_MAX, RingBatch, SpriteBatch } from './batches.ts';
 import { CameraRig } from './camera.ts';
-import { GROUND_Y, SQRT3, buildTheatre, clamp, smooth01, tileAt, type Theatre } from './common.ts';
+import { GROUND_Y, INTENT_FRESH_MS, SQRT3, buildTheatre, clamp, smooth01, tileAt, type Theatre } from './common.ts';
 import { EffectsLayer, type FxCtx } from './effects.ts';
 import { LabelLayer } from './labels.ts';
 import { TIME, terrainMaterial } from './materials.ts';
@@ -36,6 +36,9 @@ const SUN_DIR = new THREE.Vector3(-0.52, 0.8, -0.3).normalize();
 const PICK_PX = 18;
 const HOVER_MS = 60;
 const TILE_MS = 150, FRONT_MS = 330;
+/** The Director cuts to a story moment only if its freshness-weighted score reaches this; else the hottest battle. */
+const DIRECTOR_MIN_SCORE = 30;
+const DIRECTOR_REPEAT_MS = 45000; // and not to the same moment twice within this
 
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
@@ -91,6 +94,8 @@ export class ThreeRenderer implements BattleView {
   commanderNames = new Map<number, { name: string; faction: number; status: string }>();
   opInfo: { code: string; status: string; center: number; radius: number } | null = null;
   battles: { tile: number; intensity: number }[] = [];
+  intents: IntentOverlay[] = [];
+  focus: FocusPoint[] = [];
   onPick: (p: PickInfo) => void = () => {};
   onHover: (p: PickInfo | null) => void = () => {};
   onFps: (fps: number) => void = () => {};
@@ -143,6 +148,10 @@ export class ThreeRenderer implements BattleView {
   private disposed = false;
   private mm: MinimapData | null = null;
   private corners = new Float32Array(8);
+  // when each commander's current intent was first seen; intents already standing when a world loads are not "new"
+  private intentSeen = new Map<number, { id: string; at: number }>();
+  private intentPrimed = false;
+  private directorSeen = new Map<number, number>();
 
   constructor() {
     this.over = new OverlayLayer(this.fx.pointScale);
@@ -314,8 +323,25 @@ export class ThreeRenderer implements BattleView {
     }
     this.tilesDirty = true; this.frontsDirty = true; this.supplyDirty = true;
     this.lastTiles = 0; this.lastFronts = 0;
+    this.intentSeen.clear(); this.intentPrimed = false; this.directorSeen.clear();
     this.ready = true;
   }
+
+  /** Age (ms) of each commander's current intent, updating first-seen times as decisions change. */
+  private intentAges(now: number): void {
+    const seen = this.intentSeen;
+    for (const it of this.intents) {
+      const s = seen.get(it.owner);
+      if (!s || s.id !== it.id) seen.set(it.owner, { id: it.id, at: this.intentPrimed ? now : now - INTENT_FRESH_MS });
+    }
+    if (this.intents.length) this.intentPrimed = true;
+    if (seen.size > this.intents.length * 2 + 16) {
+      const live = new Set(this.intents.map((i) => i.owner));
+      for (const k of seen.keys()) if (!live.has(k)) seen.delete(k);
+    }
+  }
+
+  private intentAge = (owner: number, now: number): number => now - (this.intentSeen.get(owner)?.at ?? -1e9);
 
   setFrontier(active: Uint8Array, sites: SiteInfo[], opened: number[]): void {
     const th = this.th;
@@ -441,12 +467,16 @@ export class ThreeRenderer implements BattleView {
       uc.selectedOwner = this.selectedOwner; uc.selectedUnit = this.selectedUnit; uc.fog = this.fogView();
       this.units.update(uc);
       this.over.updateOp(now, this.opInfo?.status === 'Running');
+      this.intentAges(now);
+      // the selected commander's own intent is drawn in full by drawPlan when the plan layer is on
+      this.over.drawIntents(now, this.intents, this.intentAge, this.overlays.intents, this.overlays.plans ? this.selectedOwner : -1, this.rings);
       this.over.drawPlan(now, this.plan, this.overlays.plans, this.overlays.danger, this.units, this.rings);
       if (this.overlays.fog >= 0) this.over.drawGhosts(this.ghosts, this.hud, this.rings);
     }
     this.fx.update(now, dt, this.rings, this.overlays.weather);
     this.rings.end();
     this.hud.end();
+    this.labels?.setIntents(this.overlays.intents ? this.intents : [], this.intentAge, now);
     this.labels?.update(cam, this.w, this.h, this.overlays.labels, this.th ? this.fogView() : null);
 
     composer.render(dt / 1000);
@@ -461,8 +491,19 @@ export class ThreeRenderer implements BattleView {
     operation: (out: Float32Array): boolean => this.opTarget(out),
     director: (out: Float32Array): boolean => {
       const th = this.th;
+      if (!th) return false;
+      // story first: the best fresh moment not shown recently; otherwise the hottest battle, then the operation
+      const now = performance.now();
+      for (const f of this.focus) {
+        if (f.score < DIRECTOR_MIN_SCORE) break;
+        if (f.tile < 0 || f.tile >= th.n || now - (this.directorSeen.get(f.id) ?? -1e9) < DIRECTOR_REPEAT_MS) continue;
+        this.directorSeen.set(f.id, now);
+        if (this.directorSeen.size > 64) for (const [k, t] of this.directorSeen) if (now - t > DIRECTOR_REPEAT_MS) this.directorSeen.delete(k);
+        out[0] = th.x[f.tile]; out[1] = th.walk[f.tile]; out[2] = th.z[f.tile];
+        return true;
+      }
       const b = this.battles[0];
-      if (th && b && b.tile >= 0 && b.tile < th.n) { out[0] = th.x[b.tile]; out[1] = th.walk[b.tile]; out[2] = th.z[b.tile]; return true; }
+      if (b && b.tile >= 0 && b.tile < th.n) { out[0] = th.x[b.tile]; out[1] = th.walk[b.tile]; out[2] = th.z[b.tile]; return true; }
       return this.opTarget(out);
     },
   };
