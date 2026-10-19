@@ -4,7 +4,8 @@
 
 declare const process: { argv: string[]; exit(code: number): never };
 
-import { CLOCK, FACTIONS, FRONTIER, MAP_H, MAP_W, POP, PSI_DIM, S, STRUCTS } from '../shared/config.ts';
+import { CLOCK, FACTIONS, FRONTIER, MAP_H, MAP_W, PK, POP, PSI_DIM, S, STRUCTS } from '../shared/config.ts';
+import type { Commander, Market, Operation, Plan } from './types.ts';
 import { hashStr, hex32 } from '../shared/rng.ts';
 import { World } from './world.ts';
 import { apportion, pickRoster } from './operations.ts';
@@ -85,6 +86,7 @@ let closedViolations = 0, samples = 0;
 let frontierProbe: { chunks: number; missing: number; dup: number; opened: string[] } | null = null;
 let fork: { w2: World; at: number; restoreMs: number; bytes: number } | null = null;
 let restoreResult: { a: string; b: string; ha: string; hb: string } | null = null;
+let storyRestored = false;
 let plansAfterOpening = 0, frontierPlans = 0, lockedUnsealed = 0, lockedTicks = 0, activeBefore = 0, activeAfter = 0;
 const { w, ms, tickMs } = run(20261018, LONG, (w) => {
   if (w.tick % 100 === 0) { samples++; closedViolations += squadsOnClosed(w); }
@@ -118,6 +120,7 @@ const { w, ms, tickMs } = run(20261018, LONG, (w) => {
   if (fork && w.tick === fork.at + 500) {
     for (let i = 0; i < 500; i++) fork.w2.step();
     restoreResult = { a: digest(w), b: digest(fork.w2), ha: hex32(w.stateHash), hb: hex32(fork.w2.stateHash) };
+    storyRestored = JSON.stringify(w.story?.st) === JSON.stringify(fork.w2.story?.st);
   }
 });
 console.log(`\n${LONG} ticks (${(LONG / 5 / 60).toFixed(1)} sim min) in ${(ms / 1000).toFixed(2)} s — tick ${pcts(tickMs)}`);
@@ -161,6 +164,113 @@ const fk = fork as { w2: World; at: number; restoreMs: number; bytes: number } |
 const rr = restoreResult as { a: string; b: string; ha: string; hb: string } | null;
 check('save → restore → +500 ticks identical after a frontier opening', !!rr && rr.a === rr.b && rr.ha === rr.hb,
   rr && fk ? `snapshot at tick ${fk.at} (${(fk.bytes / 1024).toFixed(0)} KB, restore ${fk.restoreMs.toFixed(0)} ms): digest ${rr.a} vs ${rr.b}, hash ${rr.ha} vs ${rr.hb}` : 'fork not reached');
+check('save → restore → +500 ticks: story records identical too', storyRestored);
+
+// ---- story layer (presentation only): bookkeeping matches the simulation it describes
+{
+  const s = w.story!, st = s.st;
+  const v = s.view(w, []);
+  console.log(`\nstory: ${st.announced} plans announced, ${v.stats.closed} closed (${v.stats.won} ✔), ${v.stats.moments} moments, ${v.stats.named} named rivalries of ${v.stats.pairs} pairs`);
+  console.log('  moments by kind', Object.entries(st.counts).map(([k, n]) => `${k} ${n}`).join(', '));
+  console.log('  success by plan kind', v.kinds.filter((k) => k.n).map((k) => `${k.kind} ${k.won}/${k.n}`).join(', '));
+  check('story: every strategic decision is announced', st.announced === w.decisionCounter, `${st.announced} announced, ${w.decisionCounter} decisions`);
+  let mism = 0, seen = 0;
+  for (const c of w.cmds) for (const d of c.decisions) {
+    const b = st.beats.find((x) => x.id === d.id);
+    if (!b) continue;
+    seen++;
+    if ((d.reward === null) !== (b.status === 'active' || b.status === 'aborted') || (d.reward !== null && b.reward !== d.reward)) mism++;
+  }
+  check('story: plan verdicts carry the learner\'s own reward', seen > 0 && mism === 0, `${seen} beats checked, ${mism} mismatches`);
+  const recClosed = Object.values(st.records).reduce((a, r) => a + r.closed, 0);
+  check('story: per-commander records sum to the per-kind totals', recClosed === v.stats.closed && v.stats.closed <= st.announced, `${recClosed} vs ${v.stats.closed}`);
+  const pairKills = st.rivals.reduce((a, r) => a + r.k[0] + r.k[1], 0), kills = w.cmds.reduce((a, c) => a + c.stats.kills, 0);
+  check('story: head-to-head kills reconcile with commander kill counts', st.evicted > 0 || pairKills === kills, `${pairKills} pair kills, ${kills} kills, ${st.evicted} evicted`);
+  check('story: bounded (48 beats, 60 moments, 240 pairs)', st.beats.length <= 48 && st.moments.length <= 60 && st.rivals.length <= 240, `${st.beats.length} / ${st.moments.length} / ${st.rivals.length}`);
+  check('story: moments are produced and ranked', v.stats.moments > 10 && Object.keys(st.counts).length >= 4 && st.moments.every((m, i) => m.weight > 0 && m.weight <= 100 && (i === 0 || m.id > st.moments[i - 1].id)), `${v.stats.moments} moments of ${Object.keys(st.counts).length} kinds`);
+}
+
+// ---- story layer changes nothing in the war: the same seed with and without it stays bit-identical
+{
+  const on = new World('world', 4321), off = new World('world', 4321);
+  off.story = null;
+  for (let i = 0; i < 4000; i++) { on.step(); off.step(); }
+  check('story layer is presentation only: identical hash and digest with it on and off', on.stateHash === off.stateHash && digest(on) === digest(off) && on.ledger.st.nextTx === off.ledger.st.nextTx,
+    `${hex32(on.stateHash)} vs ${hex32(off.stateHash)}; ${on.story!.st.nextMoment - 1} moments recorded on one side only`);
+}
+
+// ---- story detectors on scripted events (rare in a short run, so exercised directly)
+{
+  const sw = new World('world', 31337);
+  const s = sw.story!;
+  const by = (f: number, k = 0) => sw.cmds.filter((c) => c.faction === f)[k];
+  const A = by(0), B = by(1), C = by(2), G = by(2, 1), D = by(3);
+  const count = (k: string) => s.st.moments.filter((m) => m.kind === k).length;
+  const last = () => s.st.moments[s.st.moments.length - 1];
+  // rivalry: 52 alternating kills, each its own clash → named at the 40-point mark, one milestone at clash 50
+  for (let i = 0; i < 52; i++) { sw.tick += 200; s.onKill(sw, i % 2 ? A : B, i % 2 ? B : A, 1, A.homeTile); }
+  const r = s.st.rivals.find((x) => x.a === Math.min(A.id, B.id) && x.b === Math.max(A.id, B.id));
+  check('story: rivalry named once when mutual, milestone at clash 50', !!r && r.named >= 0 && r.k[0] === 26 && r.k[1] === 26 && r.clashes === 52 && count('RIVALRY') === 2 && count('FIRST_BLOOD') === 1,
+    r ? `kills ${r.k.join('–')}, ${r.clashes} clashes, ${count('RIVALRY')} rivalry moments` : 'no record');
+  // a site trading hands: neutral → A, B takes it, A retakes, B takes it a third time
+  const site = sw.structs.find((x) => x.kind === S.MINE || x.kind === S.RELAY)!;
+  s.onSiteCaptured(sw, A, site, -1, -1);
+  s.onSiteCaptured(sw, B, site, A.id, A.faction);
+  s.onSiteCaptured(sw, A, site, B.id, B.faction);
+  const retake = last();
+  s.onSiteCaptured(sw, B, site, A.id, A.faction);
+  check('story: retake and tug of war on a site that keeps changing hands', retake.kind === 'RETAKE' && last().kind === 'TUG_OF_WAR' && last().text.includes('3 times'), `${retake.kind}; ${last().text}`);
+  // revenge: B fells A's core, then A fells B's; D fells C's, then C's descendant G fells D's
+  s.onCoreFell(sw, A, B, A.homeTile);
+  const plain = last().kind;
+  s.onCoreFell(sw, B, A, B.homeTile);
+  const own = last();
+  s.onCoreFell(sw, C, D, C.homeTile);
+  G.parents = [C.id];
+  s.onCoreFell(sw, D, G, D.homeTile);
+  check('story: core falls, own revenge and a parent\'s revenge', plain === 'CORE_DOWN' && own.kind === 'REVENGE' && last().kind === 'REVENGE' && last().text.includes('parent'), `${plain}; ${own.text} | ${last().text}`);
+  // pact broken: the first kill after a pact ended by notice, once
+  sw.treaties.push({ id: 77, a: 0, b: 1, kind: 'NAP', status: 'ended', effective: 0, expires: 0, noticeAt: sw.tick - 100, endsAt: sw.tick - 10 });
+  s.onKill(sw, A, B, 1, A.homeTile); s.onKill(sw, A, B, 1, A.homeTile);
+  check('story: first blood after a pact ended by notice, reported once', count('PACT_BROKEN') === 1);
+  // operations: a late lead change is a photo finish; a winner backed by under 20% of the pool is an upset
+  const fakeOp = (id: number) => ({ id, code: `OP-T${id}`, name: 'Test Ridge', winner: A.id, center: A.homeTile, endTick: sw.tick, roster: [A.id, B.id], scores: {} }) as unknown as Operation;
+  s.st.op = { id: 900, lead: A.id, lastChange: sw.tick - 10, lastMoment: -1 };
+  s.onOpFinished(sw, fakeOp(900), [{ id: A.id, score: 120 }, { id: B.id, score: 90 }]);
+  const photo = last().kind;
+  sw.markets.push({ opId: 901, kind: 'TOP_SCORE', lockedTotals: { [A.key]: 10, [B.key]: 90 } } as unknown as Market);
+  s.onOpFinished(sw, fakeOp(901), [{ id: A.id, score: 120 }, { id: B.id, score: 90 }]);
+  check('story: photo finish and upset', photo === 'PHOTO_FINISH' && last().kind === 'UPSET' && last().text.includes('10%'), `${photo}; ${last().text}`);
+  // streaks: five successes, then four failures
+  const plan = { kind: PK.CAPTURE, name: 'Test Mine', tile: A.homeTile, decisionId: 'd-test' } as unknown as Plan;
+  for (let i = 0; i < 5; i++) s.onPlanClosed(sw, A, plan, true, 0.4);
+  const streak = last().kind;
+  for (let i = 0; i < 4; i++) s.onPlanClosed(sw, A, plan, false, -0.3);
+  const rec = s.record(A.id);
+  check('story: streak at 5 successes, slump at 4 failures', streak === 'STREAK' && last().kind === 'SLUMP' && rec.best === 5 && rec.streak === -4 && rec.won === 5 && rec.closed === 9, `${streak}, ${last().kind}, record ${JSON.stringify(rec)}`);
+  // last stand: a core dropping below 35% is reported once per window
+  const core = sw.structs.find((x) => x.kind === S.CORE && x.owner === C.id)!;
+  sw.tick = Math.ceil(sw.tick / 150) * 150 + 25;
+  core.hp = Math.floor(core.maxHp * 0.5); s.step(sw);
+  sw.tick += 25; core.hp = Math.floor(core.maxHp * 0.3); s.step(sw);
+  sw.tick += 25; core.hp = Math.floor(core.maxHp * 0.2); s.step(sw);
+  check('story: last stand reported once when a core falls below 35%', count('LAST_STAND') === 1);
+  // comeback: the faction last in power at one sample leads by more than 2% at the next
+  const setPower = (pw: number[]) => { for (const c of sw.cmds) c.power = 0; pw.forEach((p, f) => { by(f).power = p; }); };
+  sw.tick = Math.max(900, Math.ceil(sw.tick / 150) * 150);
+  setPower([100, 40, 60, 70]); s.step(sw);
+  sw.tick += 150; setPower([100, 130, 60, 70]); s.step(sw);
+  check('story: comeback when the last faction takes the lead', count('COMEBACK') === 1 && last().kind === 'COMEBACK', last().text);
+  check('story: every scripted moment is in the chronicle under "story"', sw.chronicle.filter((e) => e.cat === 'story').length === s.st.nextMoment - 1);
+  // bounded pairs: past the cap the weakest old pair makes room, and the newest pair is kept and keeps counting
+  const before = s.st.rivals.length;
+  const fake = (id: number, faction: number) => ({ id, faction, name: `T${id}`, parents: [] }) as unknown as Commander;
+  for (let i = 0; i < 250; i++) s.onKill(sw, fake(5000 + i, 0), fake(6000 + i, 1), 1, A.homeTile);
+  s.onKill(sw, fake(5249, 0), fake(6249, 1), 1, A.homeTile);
+  const newest = s.st.rivals.find((x) => x.a === 5249 && x.b === 6249);
+  check('story: pair records stay bounded and new pairs survive the cap', s.st.rivals.length === 240 && s.st.evicted === before + 250 - 240 && !!newest && newest.k[0] === 2 && s.st.rivals.some((x) => x.named >= 0),
+    `${s.st.rivals.length} pairs, ${s.st.evicted} evicted, newest pair kills ${newest?.k.join('–') ?? 'missing'}`);
+}
 
 // 4. user bet path: cap, duplicate idempotency, one outcome
 const fresh = new World('world', 77);

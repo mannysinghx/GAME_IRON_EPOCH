@@ -7,7 +7,7 @@ import { DEFAULT_OVERLAYS, type CameraMode, type Overlays, type PickInfo } from 
 
 export interface Toast { id: number; level: 'ok' | 'warn' | 'err' | 'info'; text: string; at: number }
 
-export type BottomTab = 'chronicle' | 'analytics' | 'proving' | 'engine' | 'ledger';
+export type BottomTab = 'chronicle' | 'story' | 'analytics' | 'proving' | 'engine' | 'ledger';
 export type MobileTab = 'map' | 'theatre' | 'commanders' | 'operation' | 'predict' | 'dossier' | 'chronicle';
 
 class Store {

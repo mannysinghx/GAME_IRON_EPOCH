@@ -6,12 +6,15 @@
 import * as THREE from 'three';
 import { S } from '../../shared/config.ts';
 import type { SiteInfo } from '../../shared/protocol.ts';
-import { cssHex, factionHex, mixHex, type Theatre } from './common.ts';
+import type { IntentOverlay } from '../api.ts';
+import { INTENT_FRESH_MS, cssHex, factionHex, mixHex, type Theatre } from './common.ts';
 import type { StructVis } from './structures.ts';
 
 interface Label {
   el: HTMLDivElement; x: number; y: number; z: number; tile: number; core: boolean; text: string; color: string;
   sx: number; sy: number; op: number; shown: boolean; far: number; fade: number; seen: number;
+  /** extra opacity factor (fresh-intent fade); 0 hides the label */
+  extra: number; intent?: boolean;
 }
 
 const FONT = "'Chakra Petch', 'Inter', system-ui, sans-serif";
@@ -24,6 +27,7 @@ export class LabelLayer {
   readonly root: HTMLDivElement;
   private sites = new Map<number, Label>();
   private cores = new Map<number, Label>();
+  private intents = new Map<number, Label>(); // by commander id
   private th: Theatre | null = null;
   private seen = 0;
   private flat: Label[] = []; // iteration copy, rebuilt only when membership changes
@@ -60,7 +64,8 @@ export class LabelLayer {
     this.th = th;
     for (const l of this.sites.values()) l.el.remove();
     for (const l of this.cores.values()) l.el.remove();
-    this.sites.clear(); this.cores.clear();
+    for (const l of this.intents.values()) l.el.remove();
+    this.sites.clear(); this.cores.clear(); this.intents.clear();
     this.dirty = true;
   }
 
@@ -74,7 +79,7 @@ export class LabelLayer {
       let l = this.sites.get(s.id);
       if (!l) {
         const big = s.kind === S.CITADEL;
-        l = { el: this.make(false, big), x: th.x[s.tile], y: th.walk[s.tile], z: th.z[s.tile], tile: s.tile, core: false, text: '', color: '', sx: -1, sy: -1, op: -1, shown: false, far: big ? 190 : 135, fade: 40, seen: 0 };
+        l = { el: this.make(false, big), x: th.x[s.tile], y: th.walk[s.tile], z: th.z[s.tile], tile: s.tile, core: false, text: '', color: '', sx: -1, sy: -1, op: -1, shown: false, far: big ? 190 : 135, fade: 40, seen: 0, extra: 1 };
         l.el.style.color = '#aab3c0';
         l.color = '#aab3c0';
         this.sites.set(s.id, l);
@@ -100,7 +105,7 @@ export class LabelLayer {
       if (s.kind !== S.CORE) continue;
       let l = this.cores.get(s.id);
       if (!l) {
-        l = { el: this.make(true, true), x: s.x, y: s.y + 2.55, z: s.z, tile: s.tile, core: true, text: '', color: '', sx: -1, sy: -1, op: -1, shown: false, far: 430, fade: 70, seen };
+        l = { el: this.make(true, true), x: s.x, y: s.y + 2.55, z: s.z, tile: s.tile, core: true, text: '', color: '', sx: -1, sy: -1, op: -1, shown: false, far: 430, fade: 70, seen, extra: 1 };
         this.cores.set(s.id, l);
         this.dirty = true;
       }
@@ -113,9 +118,48 @@ export class LabelLayer {
     for (const [id, l] of this.cores) if (l.seen !== seen) { l.el.remove(); this.cores.delete(id); this.dirty = true; }
   }
 
+  /**
+   * Fresh announcements get a "NAME ▸ PLAN" chip over their target for INTENT_FRESH_MS, fading out; older intents
+   * keep only their ground ring. One pooled element per commander.
+   */
+  setIntents(list: IntentOverlay[], age: (owner: number, now: number) => number, now: number): void {
+    const th = this.th;
+    if (!th) return;
+    const keep = new Set<number>();
+    for (const it of list) {
+      if (it.tile < 0 || it.tile >= th.n) continue;
+      const a = age(it.owner, now);
+      if (a < 0 || a >= INTENT_FRESH_MS) continue;
+      keep.add(it.owner);
+      let l = this.intents.get(it.owner);
+      if (!l) {
+        const el = this.make(false, false);
+        const s = el.style;
+        s.fontSize = '10.5px'; s.fontWeight = '700'; s.letterSpacing = '0.1em'; s.textTransform = 'uppercase'; s.fontVariant = 'normal';
+        s.fontVariantCaps = 'normal'; s.padding = '2px 6px'; s.borderRadius = '3px'; s.border = '1px solid currentColor'; s.background = 'rgba(5,7,10,0.62)';
+        l = { el, x: 0, y: 0, z: 0, tile: -1, core: false, text: '', color: '', sx: -1, sy: -1, op: -1, shown: false, far: 300, fade: 70, seen: 0, extra: 0, intent: true };
+        this.intents.set(it.owner, l);
+        this.dirty = true;
+      }
+      if (l.tile !== it.tile) { l.tile = it.tile; l.x = th.x[it.tile]; l.y = th.walk[it.tile] + 0.9; l.z = th.z[it.tile]; l.sx = -1e9; }
+      const text = `${it.name} ▸ ${it.kind.replace('_', ' ')}`;
+      if (text !== l.text) { l.text = text; l.el.textContent = text; }
+      const c = cssHex(mixHex(factionHex(it.faction), 0xffffff, 0.3));
+      if (c !== l.color) { l.color = c; l.el.style.color = c; }
+      l.extra = Math.min(1, (1 - a / INTENT_FRESH_MS) * 2.2); // full for the first half, then fades
+    }
+    for (const [id, l] of this.intents) if (!keep.has(id)) { l.el.remove(); this.intents.delete(id); this.dirty = true; }
+  }
+
   /** fog: the fog view (0 unseen, 1 remembered, 2 visible) or null. */
   update(camera: THREE.PerspectiveCamera, w: number, h: number, on: boolean, fog: Uint8Array | null): void {
-    if (this.dirty) { this.flat.length = 0; for (const l of this.sites.values()) this.flat.push(l); for (const l of this.cores.values()) this.flat.push(l); this.dirty = false; }
+    if (this.dirty) {
+      this.flat.length = 0;
+      for (const l of this.sites.values()) this.flat.push(l);
+      for (const l of this.cores.values()) this.flat.push(l);
+      for (const l of this.intents.values()) this.flat.push(l);
+      this.dirty = false;
+    }
     const f = this.flat;
     const fv = fog && this.th && fog.length === this.th.n ? fog : null;
     for (let i = 0; i < f.length; i++) this.place(f[i], camera, w, h, on, fv ? FOG_OP[fv[f[i].tile]] ?? 1 : 1);
@@ -127,7 +171,7 @@ export class LabelLayer {
     if (show) {
       const dx = l.x - cam.position.x, dy = l.y - cam.position.y, dz = l.z - cam.position.z;
       const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      op = Math.min(1, (l.far - d) / l.fade) * fogK;
+      op = Math.min(1, (l.far - d) / l.fade) * fogK * l.extra;
       if (op <= 0.02) show = false;
       else {
         _v.set(l.x, l.y, l.z).project(cam);
@@ -146,13 +190,13 @@ export class LabelLayer {
     const rx = Math.round(sx * 2) / 2, ry = Math.round(sy * 2) / 2;
     if (rx !== l.sx || ry !== l.sy) {
       l.sx = rx; l.sy = ry;
-      l.el.style.transform = l.core
+      l.el.style.transform = l.core || l.intent
         ? `translate3d(${rx}px, ${ry}px, 0) translate(-50%, -100%)`
         : `translate3d(${rx}px, ${ry}px, 0) translate(-50%, 13px)`;
     }
-    const o = Math.round(op * (l.core ? 1 : 0.9) * 50) / 50;
+    const o = Math.round(op * (l.core || l.intent ? 1 : 0.9) * 50) / 50;
     if (o !== l.op) { l.op = o; l.el.style.opacity = String(o); }
   }
 
-  dispose(): void { this.root.remove(); this.sites.clear(); this.cores.clear(); }
+  dispose(): void { this.root.remove(); this.sites.clear(); this.cores.clear(); this.intents.clear(); }
 }

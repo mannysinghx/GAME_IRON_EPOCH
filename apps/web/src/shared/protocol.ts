@@ -64,7 +64,12 @@ export interface FactionView {
 export interface PlanView {
   kind: string; target: string; targetTile: number; posture: string; reserve: number; reason: string;
   started: number; score: number; explored: boolean;
+  /** decision id, the tick of the commander's next scheduled review, and the plan it was chosen over */
+  id: string; reviewAt: number; alt: { kind: string; target: string; score: number } | null;
 }
+
+/** Closed-plan record from the story layer: successes, current streak (+ successes / − failures), best streak. */
+export interface PlanRecordView { closed: number; won: number; streak: number; best: number }
 
 export interface CommanderView {
   id: number; key: string; name: string; faction: number; status: string; gen: number;
@@ -75,7 +80,7 @@ export interface CommanderView {
   opsPlayed: number; opsWon: number; plans: number;
   policy: string; plan: PlanView | null; team: number; role: string;
   res: Res; errEma: number; updates: number; parents: number[]; children: number[];
-  powerHist: number[];
+  powerHist: number[]; rec: PlanRecordView;
 }
 
 export interface TeamView {
@@ -144,6 +149,33 @@ export interface ProvingView {
   matches: number; running: boolean; recent: { id: number; a: number; b: number; seed: number; result: string; ticks: number; scoreA: number; scoreB: number; swapped: boolean }[];
 }
 
+// ------------------------------------------------------------------ story layer (spectator presentation only)
+export type BeatStatus = 'active' | 'success' | 'costly' | 'fail' | 'aborted';
+
+/** A committed plan, announced publicly, and its verdict once the next review closes it. */
+export interface PlanBeatView {
+  id: string; tick: number; cmd: number; name: string; f: number; kind: string; target: string; tile: number;
+  alt: { kind: string; target: string; score: number } | null; score: number; reason: string; explored: boolean;
+  status: BeatStatus; reward: number | null; closed: number;
+}
+
+export interface MomentView { id: number; tick: number; kind: string; weight: number; text: string; f: number; a: number[]; tile: number }
+
+/** Head-to-head record of two commanders; tuples are [by a, by b]. Score = kills + 4 captures + 15 cores + 6 operations. */
+export interface RivalryView {
+  a: number; b: number; nameA: string; nameB: string; fa: number; fb: number; scoreA: number; scoreB: number;
+  kills: number[]; caps: number[]; cores: number[]; ops: number[]; clashes: number; since: number; last: number; heat: number; named: boolean;
+}
+
+export interface StoryView {
+  beats: PlanBeatView[]; moments: MomentView[]; rivalries: RivalryView[];
+  opRivals: RivalryView[]; // pairs inside the featured operation's roster
+  focus: { id: number; tile: number; score: number; kind: string }[]; // Director candidates, best first
+  kinds: { kind: string; n: number; won: number }[]; // closed plans and successes by plan kind
+  stats: { announced: number; closed: number; won: number; moments: number; named: number; pairs: number; evicted: number };
+  counts: Record<string, number>; headline: number;
+}
+
 export interface ClockView {
   tick: number; simSeconds: number; chapter: number; campaign: number; opIndex: number;
   campaignProgress: number; chapterProgress: number; nextCampaignTick: number; nextChapterTick: number;
@@ -171,6 +203,7 @@ export interface UiSnapshot {
   battles: { tile: number; intensity: number }[];
   narrative: string[];
   frontier: FrontierView;
+  story: StoryView | null;
 }
 
 // ------------------------------------------------------------------ dossier
@@ -197,6 +230,7 @@ export interface Dossier {
   team: TeamView | null;
   res: Res; queue: { cls: number; left: number }[];
   dangerTiles: { tile: number; conf: number }[];
+  rivals: RivalryView[];
 }
 
 // ------------------------------------------------------------------ commands to the world worker

@@ -2,8 +2,9 @@ import { useState } from 'preact/hooks';
 import { DOCTRINE, FACTIONS, POP, UNITS } from '../shared/config.ts';
 import type { Dossier, MarketView, OperationView, UiSnapshot } from '../shared/protocol.ts';
 import { Bar, Lines, Radar, Spark, WeightBars } from './charts.tsx';
-import { fcss, fname, num, pct, realEta, shortHash, signed, simClock, simDur } from './format.ts';
+import { fcss, fname, num, pct, planText, realEta, shortHash, signed, simClock, simDur } from './format.ts';
 import { FactionGlyph, Icon, ResIcon, UnitIcon } from './icons.tsx';
+import { RivalRow } from './LeftPanel.tsx';
 import { Empty, KV, Pill, Section, Stat, statusTone } from './primitives.tsx';
 import { idem, store } from './store.ts';
 import { camera } from './cameraBridge.ts';
@@ -69,6 +70,12 @@ export function Operation({ ui }: { ui: UiSnapshot }) {
               );
             })}
           </div>
+          {ui.story && ui.story.opRivals.length > 0 && (
+            <div class="op-rivals">
+              <div class="mini-head">Head to head <span class="dim">records between this roster before the operation</span></div>
+              {ui.story.opRivals.slice(0, 3).map((r) => <RivalRow key={`${r.a}-${r.b}`} r={r} ui={ui} />)}
+            </div>
+          )}
           <div class="objs">
             {op.objectives.map((o) => {
               const c = name(o.holder);
@@ -257,8 +264,20 @@ export function DossierPanel({ ui, d }: { ui: UiSnapshot; d: Dossier | null }) {
             <Pill tone={d.plan.reason.startsWith('LEARNED') ? 'info' : d.plan.explored ? 'warn' : 'muted'}>{d.plan.reason}</Pill>
             <span>{d.plan.posture.toLowerCase()} · reserve {d.plan.reserve}% · {d.plan.group.length} squads assigned · age {simDur(ui.clock.tick - d.plan.started)}</span>
           </div>
+          <div class="plan-meta">
+            {cv.plan?.alt && <span>chosen over <b>{planText(cv.plan.alt.kind, cv.plan.alt.target)}</b> <span class="mono">{d.plan.score.toFixed(2)} vs {cv.plan.alt.score.toFixed(2)}</span></span>}
+            {cv.plan && <span class="push-right mono" title="Next scheduled strategic review: the plan's verdict is recorded then">review in {simDur(Math.max(0, cv.plan.reviewAt - ui.clock.tick))}</span>}
+          </div>
         </div>
       )}
+
+      <div class="story-rec">
+        <div class="sr-cell" title="Closed plans whose objective was met with a positive reward"><span>Plans ✔</span><b class="mono">{cv.rec.won}<em>/{cv.rec.closed}</em></b><em class="mono dim">{cv.rec.closed ? pct(cv.rec.won / cv.rec.closed) : '—'}</em></div>
+        <div class="sr-cell" title="Current run: successes (▲) or failures (▼) in a row"><span>Streak</span><b class="mono" style={{ color: cv.rec.streak > 0 ? '#7ee2a8' : cv.rec.streak < 0 ? '#ff5d5d' : undefined }}>{cv.rec.streak > 0 ? `▲${cv.rec.streak}` : cv.rec.streak < 0 ? `▼${-cv.rec.streak}` : '—'}</b><em class="mono dim">best {cv.rec.best}</em></div>
+        <div class="sr-rivals">
+          {d.rivals.length === 0 ? <span class="dim tiny">No head-to-head record yet.</span> : d.rivals.map((r) => <RivalRow key={`${r.a}-${r.b}`} r={r} ui={ui} compact />)}
+        </div>
+      </div>
 
       {lastDec && (
         <div class="cands">

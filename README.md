@@ -31,15 +31,36 @@ Open http://127.0.0.1:5317. Other scripts: `npm test` (headless simulation check
 | Area | Contents |
 | --- | --- |
 | Top bar | Live/paused state, chapter · campaign · operation phase, simulation clock, speed (pause, 1×–32×), tick + rolling state hash, sim ticks/s and render FPS, Signal balance |
-| Left column | 01 Theatre status (clocks, territory share, squads, commanders, sites, combat heat) · 02 Factions (power trend, territory, sites, squads, K/D, stock & income per minute, unit mix, supply coverage, upkeep, published modifiers) · 03 Diplomacy (4×4 relation matrix, pacts) · 04 Commander standings (world power, skill Elo ± CI, merit, reliability — sortable, kept separate) · 05 Team headquarters · 06 Published schedule & weather |
-| Battlefield | 2.5D extruded hex map, territory tint, glowing front lines, sealed operation region, tracers, artillery arcs, explosions, scorch marks, storms; fog-of-war view per faction with last-known enemy ghosts; selected agent's plan arrow, considered targets and danger memory; minimap; narrative ticker; hover tooltips |
-| Right column | 07 Featured operation (phase machine, live objective race, objectives, seed commitment/reveal, recent results) · 08 Prediction desk (wallet, pari-mutuel markets with pools, shares and estimated returns, stake caps, receipts) · 09 Agent dossier (separate records, current plan, last review's candidate plans with doctrine U / learned L / score, doctrine radar with mutations, online-learning stats and learned weights, memory facts, decision log, lineage, forces, policy versions) |
-| Bottom strip | Chronicle (filter + search) · Analytics (territory share, faction power, learning curve, Elo) · Proving ground (equal-budget ratings with Wilson intervals, recent duels) · Engine (tick p50/p95/p99 against the 200 ms budget, bounded caches, state hash history, snapshot, new world) · Ledger (invariants, totals, recent postings) |
+| Left column | 01 Theatre status (clocks, territory share, squads, commanders, sites, combat heat) · 02 Factions (power trend, territory, sites, squads, K/D, stock & income per minute, unit mix, supply coverage, upkeep, published modifiers) · 03 Diplomacy (4×4 relation matrix, pacts) · 04 Commander standings (world power, skill Elo ± CI, merit, reliability — sortable, kept separate) · 05 Team headquarters · 06 Published schedule & weather · 10 Rivalries (head-to-head scores with kills, sites, cores and operations behind them; named rivalries ranked by recent heat) |
+| Battlefield | 2.5D extruded hex map, territory tint, glowing front lines, sealed operation region, tracers, artillery arcs, explosions, scorch marks, storms; fog-of-war view per faction with last-known enemy ghosts; selected agent's plan arrow, considered targets and danger memory; every commander's announced target (ring, plus a pulse and name chip when new); story headline banner; story ticker; minimap; hover tooltips |
+| Right column | 07 Featured operation (phase machine, live objective race, objectives, seed commitment/reveal, recent results) · 08 Prediction desk (wallet, pari-mutuel markets with pools, shares and estimated returns, stake caps, receipts) · 09 Agent dossier (separate records, current plan with the plan it was chosen over and its next review, plan record and streak, top rivals, last review's candidate plans with doctrine U / learned L / score, doctrine radar with mutations, online-learning stats and learned weights, memory facts, decision log, lineage, forces, policy versions) |
+| Bottom strip | Chronicle (filter + search) · Story (plan board of every live intent, ranked moments, plan success by kind) · Analytics (territory share, faction power, learning curve, Elo) · Proving ground (equal-budget ratings with Wilson intervals, recent duels) · Engine (tick p50/p95/p99 against the 200 ms budget, bounded caches, state hash history, snapshot, new world) · Ledger (invariants, totals, recent postings) |
 
 Camera: drag to pan, right-drag or shift-drag to rotate and tilt, wheel or pinch to zoom, double-click to fly to
 a point. Keys: arrows pan · `Q/E` rotate · `Z/C` tilt · `+/−` zoom · `0` fit · `N` north · `F` follow ·
-`O` operation · `D` director · `G` free · `Space` pause · `1–6` speed · `[ ]` cycle commanders · `V` fog view ·
+`O` operation · `D` director (biggest fresh story moment, else hottest battle) · `G` free · `Space` pause · `1–6` speed · `[ ]` cycle commanders · `V` fog view ·
 `?` help.
+
+## Story layer (spectator presentation)
+
+`sim/story.ts` turns committed events into three things a watcher can follow. It only reads simulation state and writes its
+own bounded records: no RNG, no agent input, no effect on combat, economy or markets (the selftest runs one seed with it on and
+off and gets bit-identical hashes). Texts state accepted plan ids, observed facts and results only (design §15.4).
+
+- **Plan announcements**: every strategic review is announced with the runner-up it was chosen over and the score margin;
+  the next review stamps a verdict (✔ objective met with positive reward, ≈ met at a net cost, ✘ not met) next to the
+  learner's own reward. Per-commander records and streaks, and success rates per plan kind (in test runs captures of
+  neutral sites succeed about 60% of the time, attacks on held sites about 35%).
+- **Moments**: rule-based detectors with a weight (how big the story is): core falls and revenge (including a parent's),
+  last stands, ordered core assaults, sites changing hands again and again, retakes, upsets against the pool, photo
+  finishes and lead changes in operations, faction lead changes and comebacks, pacts, notices and the first blood after
+  a pact ends, long streaks and slumps, rivalries. Moments go to the chronicle under `story`; weight 60+ flashes on the
+  map; the Director camera cuts to the best fresh one (falling back to the hottest battle).
+- **Rivalries**: head-to-head score per commander pair (kills + 4 × sites taken + 15 × cores felled + 6 × operations
+  finished ahead), counted in clashes; named once mutual. Shown in section 10, the dossier and the featured operation.
+
+Snapshots carry the story records as an optional field; worlds saved before it resume with an empty story (no save
+version bump, so no world is discarded).
 
 ## What the agents actually do
 
@@ -85,7 +106,7 @@ only) create pools so markets have depth; they are labelled as such in code.
 
 ## Verified
 
-`npm test` (12,000 ticks): identical state hashes for identical seeds; save → restore → +500 ticks yields an
+`npm test` (12,000 ticks): identical state hashes for identical seeds; the story layer leaves the hash unchanged and its records survive save → restore; every decision is announced and every verdict carries the learner's reward; head-to-head kills reconcile with commander kill counts; each detector fires on a scripted event; save → restore → +500 ticks yields an
 identical hash, including after a frontier opening; ledger balances after every tick; stake cap, idempotency
 and one-outcome rules enforced; apportionment conserves pools; populations and memory bounded; frontier opens
 on schedule with every site instantiated exactly once and no squad ever on closed land; 0 validator-rejected

@@ -136,7 +136,17 @@ function wilson(wins: number, n: number): [number, number, number] {
 function planView(w: World, c: Commander): PlanView | null {
   const p = c.plan;
   if (!p) return null;
-  return { kind: PLAN_NAMES[p.kind], target: p.name, targetTile: p.tile, posture: p.posture, reserve: p.reserve, reason: p.reason, started: p.started, score: Math.round(p.score * 1000) / 1000, explored: p.explored };
+  // the plan it was chosen over: the best-scoring other candidate of the same review
+  const rec = c.decisions[0]?.id === p.decisionId ? c.decisions[0] : undefined;
+  let alt: PlanView['alt'] = null;
+  if (rec) for (let i = 0; i < rec.candidates.length; i++) {
+    const cd = rec.candidates[i];
+    if (i !== rec.chosen && (!alt || cd.score > alt.score)) alt = { kind: PLAN_NAMES[cd.kind], target: cd.name, score: Math.round(cd.score * 1000) / 1000 };
+  }
+  return {
+    kind: PLAN_NAMES[p.kind], target: p.name, targetTile: p.tile, posture: p.posture, reserve: p.reserve, reason: p.reason, started: p.started,
+    score: Math.round(p.score * 1000) / 1000, explored: p.explored, id: p.decisionId, reviewAt: c.nextStrategic, alt,
+  };
 }
 
 export function commanderView(w: World, c: Commander, mineCount: number, territory: number, sites: number): CommanderView {
@@ -151,7 +161,7 @@ export function commanderView(w: World, c: Commander, mineCount: number, territo
     kills: c.stats.kills, losses: c.stats.losses, reliability: reliability(c), fallbackRate: c.rel.decisions ? c.rel.fallbacks / c.rel.decisions : 0,
     opsPlayed: c.stats.opsPlayed, opsWon: c.stats.opsWon, plans: c.stats.plans, policy: policyLabel(c), plan: planView(w, c),
     team: c.team, role: c.role, res: { ...c.res }, errEma: c.errEma, updates: c.updates, parents: c.parents.slice(), children: c.children.slice(),
-    powerHist: c.hist.power.slice(-40),
+    powerHist: c.hist.power.slice(-40), rec: w.story ? { ...w.story.record(c.id) } : { closed: 0, won: 0, streak: 0, best: 0 },
   };
 }
 
@@ -281,6 +291,7 @@ export function buildUi(w: World, vs: ViewState, speed: number, paused: boolean,
     battles,
     narrative: w.narrative.slice(-6),
     frontier: frontierView(w),
+    story: w.story ? w.story.view(w, (live ?? next)?.roster ?? []) : null,
   };
 }
 
@@ -327,6 +338,7 @@ export function buildDossier(w: World, id: number): Dossier | null {
     team: team ? teamView(team) : null,
     res: { ...c.res }, queue: c.queue.map((q) => ({ cls: q.cls, left: q.left })),
     dangerTiles: c.memory.filter((m) => m.kind === 'DANGER' || m.kind === 'LESSON').map((m) => ({ tile: m.tile, conf: m.conf })),
+    rivals: w.story ? w.story.involving(w, c.id, 3) : [],
   };
 }
 

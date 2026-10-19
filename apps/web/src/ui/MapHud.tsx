@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { FACTIONS, STRUCTS, T, TERRAIN, UNITS } from '../shared/config.ts';
 import { UF } from '../shared/protocol.ts';
-import type { UiSnapshot } from '../shared/protocol.ts';
+import type { MomentView, PlanBeatView, UiSnapshot } from '../shared/protocol.ts';
 import type { CameraMode, CameraPreset, MinimapData, Overlays } from '../render/api.ts';
-import { FRONTIER_CSS, fcss, num, pct, realEta, simDur } from './format.ts';
+import { BEAT_COLOR, BEAT_ICON, FRONTIER_CSS, fcss, momentStyle, num, pct, planText, realEta, signed, simDur, verdictText } from './format.ts';
 import { FactionGlyph, Icon } from './icons.tsx';
 import { store, useHover } from './store.ts';
 import { camera } from './cameraBridge.ts';
@@ -12,7 +12,10 @@ export function MapHud({ ui }: { ui: UiSnapshot }) {
   return (
     <>
       <OpBanner ui={ui} />
-      <FrontierFlash ui={ui} />
+      <div class="map-flashes">
+        <Headline ui={ui} />
+        <FrontierFlash ui={ui} />
+      </div>
       <Toolbar />
       <Minimap ui={ui} />
       <Ticker ui={ui} />
@@ -69,13 +72,54 @@ function FrontierFlash({ ui }: { ui: UiSnapshot }) {
   );
 }
 
-type LayerKey = 'territory' | 'fronts' | 'supply' | 'plans' | 'danger' | 'labels' | 'weather' | 'bloom' | 'shadows';
+// ------------------------------------------------------------------ story headline
+const HEADLINE_MS = 9000;
+const HEADLINE_FRESH = 300; // ticks: only moments from the last simulated minute flash (none from before a reload)
+let flashed = { world: '', id: 0 }; // module scope: survives HUD re-renders, resets with a new world
+
+/** The strongest new headline-weight moment flashes over the map; clicking flies the camera there. */
+function Headline({ ui }: { ui: UiSnapshot }) {
+  const st = ui.story;
+  const [cur, setCur] = useState<{ m: MomentView; at: number } | null>(null);
+  useEffect(() => {
+    if (!st) return;
+    if (flashed.world !== ui.world.id) flashed = { world: ui.world.id, id: 0 };
+    let best: MomentView | null = null, top = flashed.id;
+    for (const m of st.moments) {
+      top = Math.max(top, m.id);
+      if (m.id <= flashed.id || m.weight < st.headline || ui.clock.tick - m.tick > HEADLINE_FRESH) continue;
+      if (!best || m.weight > best.weight || (m.weight === best.weight && m.id > best.id)) best = m;
+    }
+    flashed.id = top;
+    if (best) setCur({ m: best, at: performance.now() });
+  });
+  useEffect(() => {
+    if (!cur) return;
+    const t = setTimeout(() => setCur(null), HEADLINE_MS);
+    return () => clearTimeout(t);
+  }, [cur]);
+  if (!cur) return null;
+  const m = cur.m;
+  const [label, color] = momentStyle(m.kind);
+  const go = () => { if (m.tile >= 0) camera.focusTile(m.tile, 46); if (m.a[0] !== undefined) store.select(m.a[0]); };
+  return (
+    <div key={m.id} class="headline" role="status" style={{ '--mc': color }} onClick={go} title={m.tile >= 0 ? 'Fly the camera there and open the commander' : 'Open the commander'}>
+      <span class="hl-chip">{label}</span>
+      <span class="hl-text">{m.text}</span>
+      {m.tile >= 0 && <span class="hl-go"><Icon name="target" size={12} /></span>}
+      <span class="hl-bar" style={{ animationDuration: `${HEADLINE_MS}ms` }} />
+    </div>
+  );
+}
+
+type LayerKey ='territory' | 'fronts' | 'supply' | 'plans' | 'intents' | 'danger' | 'labels' | 'weather' | 'bloom' | 'shadows';
 
 const MAP_LAYERS: { k: LayerKey; label: string; hint: string }[] = [
   { k: 'territory', label: 'Territory', hint: 'faction tint' },
   { k: 'fronts', label: 'Front lines', hint: 'borders, contested edges' },
   { k: 'supply', label: 'Supply network', hint: 'per-faction coverage' },
   { k: 'plans', label: 'Agent plan', hint: 'selected commander intent' },
+  { k: 'intents', label: 'All intents', hint: 'every commander\'s announced target' },
   { k: 'danger', label: 'Agent memory', hint: 'route failures, danger' },
   { k: 'labels', label: 'Labels', hint: 'sites and commanders' },
   { k: 'weather', label: 'Weather', hint: 'published storms' },
@@ -324,12 +368,65 @@ function Minimap({ ui }: { ui: UiSnapshot }) {
   );
 }
 
+// ------------------------------------------------------------------ story ticker
+type TickerItem =
+  | { key: string; tick: number; kind: 'beat'; b: PlanBeatView; prior: PlanBeatView | null }
+  | { key: string; tick: number; kind: 'verdict'; b: PlanBeatView }
+  | { key: string; tick: number; kind: 'moment'; m: MomentView };
+
+/** Newest story beats: plan announcements (with the verdict on the plan they replace) and moments. */
+export function storyFeed(ui: UiSnapshot, n: number): TickerItem[] {
+  const st = ui.story;
+  if (!st) return [];
+  const items: TickerItem[] = [];
+  const verdicts = new Map<string, PlanBeatView>(); // `${cmd}:${tick}` → closed beat
+  for (const b of st.beats) if (b.status !== 'active' && b.closed >= 0) verdicts.set(`${b.cmd}:${b.closed}`, b);
+  for (const b of st.beats) {
+    const k = `${b.cmd}:${b.tick}`;
+    const prior = verdicts.get(k) ?? null;
+    if (prior) verdicts.delete(k);
+    items.push({ key: `b${b.id}`, tick: b.tick, kind: 'beat', b, prior });
+  }
+  for (const b of verdicts.values()) items.push({ key: `v${b.id}`, tick: b.closed, kind: 'verdict', b });
+  for (const m of st.moments) items.push({ key: `m${m.id}`, tick: m.tick, kind: 'moment', m });
+  // newest first; at equal ticks a moment outranks a routine plan beat
+  return items.sort((a, b) => b.tick - a.tick || (a.kind === 'moment' ? -1 : 0) - (b.kind === 'moment' ? -1 : 0)).slice(0, n);
+}
+
+function Verdict({ b }: { b: PlanBeatView }) {
+  const ok = b.status === 'success' || b.status === 'costly';
+  return (
+    <span class="tk-verdict" style={{ color: BEAT_COLOR[b.status] }}>
+      {BEAT_ICON[b.status]} {b.status === 'aborted' ? `abandoned ${planText(b.kind, b.target)} (core fell)` : verdictText(b.kind, b.target, ok)}
+      {b.reward !== null && <em class="mono"> {signed(b.reward, 2)}</em>}
+    </span>
+  );
+}
+
+export function TickerLine({ it }: { it: TickerItem }) {
+  if (it.kind === 'moment') {
+    const [label, color] = momentStyle(it.m.kind);
+    return <><span class="tk-chip" style={{ '--mc': color }}>{label}</span><span class="tk-text">{it.m.text}</span></>;
+  }
+  const b = it.b;
+  const who = <><i class="tk-dot" style={{ background: fcss(b.f) }} /><b>{b.name}</b> </>;
+  if (it.kind === 'verdict') return <>{who}<Verdict b={b} /></>;
+  return (
+    <>
+      {who}
+      {it.prior && <><Verdict b={it.prior} /><span class="tk-arrow"> → </span></>}
+      <span class="tk-commit">{b.explored ? 'tries' : 'commits to'} <b>{planText(b.kind, b.target)}</b></span>
+      {b.alt && <em class="tk-alt"> over {planText(b.alt.kind, b.alt.target)} <span class="mono">{b.score.toFixed(2)}/{b.alt.score.toFixed(2)}</span></em>}
+    </>
+  );
+}
+
 function Ticker({ ui }: { ui: UiSnapshot }) {
-  const lines = ui.narrative.slice(-2).reverse();
+  const lines = storyFeed(ui, 2);
   if (!lines.length) return null;
   return (
     <div class="ticker">
-      {lines.map((l, i) => <div key={l + i} class={`tk ${i === 0 ? 'new' : 'old'}`}>{l}</div>)}
+      {lines.map((it, i) => <div key={it.key} class={`tk ${i === 0 ? 'new' : 'old'}`}><TickerLine it={it} /></div>)}
     </div>
   );
 }

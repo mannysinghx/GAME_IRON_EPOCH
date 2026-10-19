@@ -382,6 +382,7 @@ function Predict({ ui }: { ui: UiSnapshot | null }) {
         </Sub>
         <Sub icon="eye" title="Read intent, not just size">
           <p>Use the <b>fog buttons</b> on the map toolbar to see exactly what one side can observe, including last-known enemy ghosts. Turn on the <b>Agent plan</b> and <b>Agent memory</b> layers to see where the selected commander is heading and which tiles it fears.</p>
+          <p>Every commitment is public: a <b>pulsing ring and name chip</b> mark a fresh target, the ticker says what the plan was chosen over, and the <b>Story</b> tab's plan board lists every live intent with its next review. Watch for converging intents on one site, a commander on a long ▲ streak, and the success rate of each plan kind (attacks on held sites fail far more often than captures of neutral ones). <b>Rivalries (10)</b> show who has the upper hand in a pairing before an operation even starts.</p>
           {op && <div class="sg-live"><span class="sg-live-dot" />Now: <b class="mono">{op.code}</b> {op.name} · {op.status} · {op.objectives.length} objectives</div>}
         </Sub>
       </div>
@@ -399,10 +400,12 @@ const PANELS: [string, string, string][] = [
   ['06', 'Published schedule', 'next operation, frontier, campaign, weather'],
   ['07', 'Featured operation', 'phase, live objective race, seed commitment'],
   ['08', 'Prediction desk', 'wallet, markets, stakes, receipts'],
-  ['09', 'Agent dossier', 'plan, candidates (U / L / score), doctrine, memory, lineage'],
+  ['09', 'Agent dossier', 'plan, candidates (U / L / score), plan record and rivals, doctrine, memory, lineage'],
+  ['10', 'Rivalries', 'head-to-head scores, clashes, named rivalries by recent heat'],
 ];
 const TABS: [string, string][] = [
   ['Chronicle', 'searchable, append-only history with filters'],
+  ['Story', 'plan board of every live intent, ranked moments, plan success by kind'],
   ['Analytics', 'territory, power, learning curve and Elo charts'],
   ['Proving ground', 'equal-budget duels that produce skill ratings'],
   ['Engine', 'tick budget, determinism hash, snapshots'],
@@ -435,6 +438,7 @@ function Screen() {
           <span><i class="lg-op" />Sealed operation zone</span>
           <span><i class="lg-frontier" />Frontier boundary: locked land beyond</span>
           <span><Icon name="eye" size={13} />Fog view: unseen land darkens, ghosts mark last-known enemies</span>
+          <span><i class="lg-intent" />Intent ring: a commander's announced target (pulses and names itself when new)</span>
         </div>
         <p class="sg-small">Units and structures take their owner's colour; neutral sites are pale grey. Hover anything for details, click a squad to open its commander's dossier.</p>
       </Sub>
@@ -461,7 +465,7 @@ function SiteGlyph({ kind }: { kind: number }) {
 const KEYS: [string, string][] = [
   ['← ↑ → ↓', 'Pan'], ['Q / E', 'Rotate left / right'], ['Z / C', 'Tilt up / down'], ['+ / −', 'Zoom in / out'],
   ['0', 'Fit the theatre'], ['N', 'North up'], ['F', 'Follow selected commander'], ['O', 'Operation camera'],
-  ['D', 'Director: hottest battle'], ['G', 'Free camera'], ['Space', 'Pause / resume'], ['1 – 6', 'Speed 1× … 32×'],
+  ['D', 'Director: biggest story, else hottest battle'], ['G', 'Free camera'], ['Space', 'Pause / resume'], ['1 – 6', 'Speed 1× … 32×'],
   ['[ / ]', 'Previous / next commander'], ['V', 'Cycle fog-of-war view'], ['?', 'Help and shortcuts'], ['Esc', 'Close dialogs'],
 ];
 

@@ -50,7 +50,7 @@ export function tickOperations(w: World): void {
         }
         break;
       case 'Running':
-        if ((tick - op.startTick) % CLOCK.CAPTURE === 0) scoreOperation(w, op);
+        if ((tick - op.startTick) % CLOCK.CAPTURE === 0) { scoreOperation(w, op); w.story?.onOpScored(w, op); }
         if (tick >= op.endTick) finishOperation(w, op);
         break;
       case 'Provisional':
@@ -219,6 +219,7 @@ function finishOperation(w: World, op: Operation): void {
   }
   const txt = ranked.map((r) => `${w.cmdName(r.id)} ${r.score}`).join(' · ');
   w.log('ops', `${op.code} final objective recorded (provisional): ${op.result === 'NONE' ? 'no objective score' : op.result === 'TIE' ? 'tie' : op.result}. Scores ${txt}.`, w.cmdById.get(op.winner)?.faction ?? -1, op.roster, op.center);
+  w.story?.onOpFinished(w, op, ranked);
 }
 
 function settleOperation(w: World, op: Operation): void {

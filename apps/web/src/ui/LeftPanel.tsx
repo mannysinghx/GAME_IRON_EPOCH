@@ -1,8 +1,8 @@
 import { Fragment } from 'preact';
 import { CHUNK, FACTIONS, FRONTIER, MAP_H, MAP_W, UNITS } from '../shared/config.ts';
-import type { CommanderView, UiSnapshot } from '../shared/protocol.ts';
+import type { CommanderView, RivalryView, UiSnapshot } from '../shared/protocol.ts';
 import { Bar, Spark } from './charts.tsx';
-import { FRONTIER_CSS, compact, fcss, fname, num, pct, realEta, simClock, simDur } from './format.ts';
+import { FRONTIER_CSS, compact, fcss, fname, kindText, num, pct, planText, realEta, simClock, simDur } from './format.ts';
 import { FactionGlyph, Icon, ResIcon, UnitIcon } from './icons.tsx';
 import { Empty, KV, Pill, Section, Stat, Tabs, statusTone } from './primitives.tsx';
 import { store } from './store.ts';
@@ -16,7 +16,45 @@ export function LeftPanel({ ui }: { ui: UiSnapshot }) {
       <Commanders ui={ui} />
       <Teams ui={ui} />
       <Schedule ui={ui} />
+      <Rivalries ui={ui} />
     </div>
+  );
+}
+
+/** One head-to-head record: tug-of-war bar of the two scores plus the counts behind them. */
+export function RivalRow({ r, ui, compact: small }: { r: RivalryView; ui: UiSnapshot; compact?: boolean }) {
+  const tot = Math.max(1, r.scoreA + r.scoreB);
+  const age = ui.clock.tick - r.last;
+  return (
+    <div class={`rv ${r.named ? 'named' : ''}`} style={{ '--fa': fcss(r.fa), '--fb': fcss(r.fb) }}>
+      <div class="rv-top">
+        <span class="rv-n a" onClick={() => store.select(r.a)}><i />{r.nameA}</span>
+        <b class="mono">{r.scoreA}<em>–</em>{r.scoreB}</b>
+        <span class="rv-n b" onClick={() => store.select(r.b)}>{r.nameB}<i /></span>
+      </div>
+      <div class="rv-bar"><span class="a" style={{ width: `${(r.scoreA / tot) * 100}%` }} /><span class="b" /></div>
+      {!small && (
+        <div class="rv-meta mono">
+          <span title="clashes: contact separated by 30 s or more">{r.clashes} {r.clashes === 1 ? 'clash' : 'clashes'}</span>
+          <span title="squads destroyed">K {r.kills[0]}–{r.kills[1]}</span>
+          <span title="sites taken from the other">S {r.caps[0]}–{r.caps[1]}</span>
+          {(r.cores[0] + r.cores[1]) > 0 && <span title="command cores felled">C {r.cores[0]}–{r.cores[1]}</span>}
+          {(r.ops[0] + r.ops[1]) > 0 && <span title="operations finished ahead of the other">O {r.ops[0]}–{r.ops[1]}</span>}
+          <span class="rv-last" title="since the last contact">{age < 150 ? 'live' : simDur(age)}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function Rivalries({ ui }: { ui: UiSnapshot }) {
+  const st = ui.story;
+  const list = st?.rivalries ?? [];
+  return (
+    <Section id="rivalries" index="10" title="Rivalries" meta={<span class="dim">{st ? `${st.stats.named} named · ${st.stats.pairs} pairs` : ''}</span>} accent="#ff4f9a">
+      {list.length === 0 ? <Empty>Head-to-head records start with the first exchange of fire between two commanders. A rivalry is named once it is mutual: three clashes and each side holding at least a quarter of the score.</Empty> : list.slice(0, 8).map((r) => <RivalRow key={`${r.a}-${r.b}`} r={r} ui={ui} />)}
+      <div class="foot-note">Score = squads destroyed + 4 × sites taken from the other + 15 × command cores felled + 6 × operations finished ahead. Ranked by recent heat; records never affect the war.</div>
+    </Section>
   );
 }
 
@@ -234,14 +272,16 @@ export function Commanders({ ui }: { ui: UiSnapshot }) {
         {list.map((c, i) => {
           const sel = store.selected === c.id;
           return (
-            <div key={c.id} class={`ct-row ${sel ? 'sel' : ''} st-${c.status}`} onClick={() => store.select(c.id)} title={`${c.name} · ${c.policy} · plan ${c.plan ? `${c.plan.kind} ${c.plan.target}` : '—'}`}>
+            <div key={c.id} class={`ct-row ${sel ? 'sel' : ''} st-${c.status}`} onClick={() => store.select(c.id)} title={`${c.name} · ${c.policy} · plan ${c.plan ? planText(c.plan.kind, c.plan.target) : '—'} · plans ✔ ${c.rec.won}/${c.rec.closed}, best streak ${c.rec.best}`}>
               <span class="mono dim">{i + 1}</span>
               <span class="ct-name">
                 <i style={{ background: fcss(c.faction) }} />
                 <b>{c.name}</b>
                 <em>G{c.gen}</em>
                 {c.status !== 'active' && <Pill tone={statusTone(c.status)}>{c.status}</Pill>}
-                {c.plan && c.status === 'active' && <span class="ct-plan">{c.plan.kind.replace('_', ' ').toLowerCase()}</span>}
+                {c.status === 'active' && c.rec.streak >= 3 && <span class="ct-streak up" title={`${c.rec.streak} successful plans in a row`}>▲{c.rec.streak}</span>}
+                {c.status === 'active' && c.rec.streak <= -3 && <span class="ct-streak down" title={`${-c.rec.streak} failed plans in a row`}>▼{-c.rec.streak}</span>}
+                {c.plan && c.status === 'active' && <span class="ct-plan">{kindText(c.plan.kind)}</span>}
               </span>
               <span class="mono">{c.status === 'active' ? num(c.power) : '—'}</span>
               <span class="mono" title={`${c.evalGames} games · win ${pct(c.winRate)} [${pct(c.winLo)}–${pct(c.winHi)}] 95% CI`}>{c.elo}<em class={c.provisional ? 'prov' : 'dim'}>{c.provisional ? 'P' : `±${c.eloCi}`}</em></span>

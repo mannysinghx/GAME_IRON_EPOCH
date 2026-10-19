@@ -21,6 +21,7 @@ import { foundingMuster, clockEvents, onCoreDestroyed, emergencyCheck, frontierM
 import { tickOperations } from './operations.ts';
 import { tickMarkets, initMarkets } from './market.ts';
 import { Ledger } from './ledger.ts';
+import { Story } from './story.ts';
 
 export type Mode = 'world' | 'duel';
 
@@ -84,6 +85,8 @@ export class World {
   generation = 0;
   narrative: string[] = [];
   battleHeat: Map<number, number> = new Map();
+  /** Spectator story layer (world mode only). Write-only from the simulation's point of view: nothing reads it back. */
+  story: Story | null;
 
   // transient (rebuilt on load)
   flow: FlowCache;
@@ -147,6 +150,7 @@ export class World {
     this.flow = new FlowCache(this.grid, this.moveCost, this.regionMask);
     this.series = { version: 0, ticks: [], territory: [[], [], [], []], power: [[], [], [], []], squads: [[], [], [], []], kills: [[], [], [], []], learnErr: [], reward: [] };
     this.recordFx = mode === 'world';
+    this.story = mode === 'world' ? new Story() : null;
 
     const nf = mode === 'world' ? 4 : 2;
     for (let f = 0; f < nf; f++) {
@@ -469,6 +473,7 @@ export class World {
       clockEvents(this);
       if (tick % 25 === 0) emergencyCheck(this);
       if (tick % CLOCK.SAMPLE === 0) this.sample();
+      this.story?.step(this);
     } else {
       tickOperations(this);
     }
@@ -974,6 +979,7 @@ export class World {
       const value = UNITS[s.cls].alloy + UNITS[s.cls].energy;
       if (owner) { owner.stats.losses++; owner.stats.valueLost += value; noteLoss(this, owner, s.tile, killer?.faction ?? -1); }
       if (killer) { killer.stats.kills++; killer.stats.valueKilled += value; this.factions[killer.faction].kills++; }
+      if (killer && owner) this.story?.onKill(this, killer, owner, s.cls, s.tile);
       this.factions[s.faction].losses++;
       if (killer && killer.faction !== s.faction) {
         const fs = this.factions[s.faction];
@@ -1078,7 +1084,7 @@ export class World {
         this.setOwner(t, capturer.id);
         this.capProg[t] = 0;
         if (site && st) {
-          const prevF = st.faction;
+          const prevF = st.faction, prevSt = st.owner;
           st.owner = capturer.id; st.faction = capturer.faction;
           capturer.stats.captures++;
           this.emit(FX.CAPTURE, t, st.kind, capturer.faction);
@@ -1093,6 +1099,7 @@ export class World {
           }
           if (st.kind === S.CITADEL) this.onCitadel(capturer);
           for (const tm of this.teams) if (tm.members.some((m) => m.id === capturer.id)) tm.record.captures++;
+          this.story?.onSiteCaptured(this, capturer, st, prevSt, prevF);
         } else if (this.recordFx && (t & 3) === 0) {
           this.emit(FX.CAPTURE, t, -1, capturer.faction);
         }
@@ -1109,7 +1116,9 @@ export class World {
     if (this.factions.some((x) => x.citadel)) return;
     fs.citadel = true;
     fs.capBonus += 1;
-    this.log('lineage', `Citadel awakening: ${this.factionName(c.faction)} took Citadel Prime first and gains a specialist recruitment slot (not a free army).`, c.faction, [c.id], this.map.sites.find((s) => s.kind === S.CITADEL)?.tile ?? -1);
+    const tile = this.map.sites.find((s) => s.kind === S.CITADEL)?.tile ?? -1;
+    this.log('lineage', `Citadel awakening: ${this.factionName(c.faction)} took Citadel Prime first and gains a specialist recruitment slot (not a free army).`, c.faction, [c.id], tile);
+    this.story?.onCitadel(this, c, tile);
   }
 
   territoryDecay(): void {

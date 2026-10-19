@@ -4,13 +4,19 @@
 import type { FrameMsg, MapStatic, SiteInfo } from '../shared/protocol.ts';
 
 export interface Overlays {
-  territory: boolean; fronts: boolean; supply: boolean; fog: number; plans: boolean; danger: boolean;
+  territory: boolean; fronts: boolean; supply: boolean; fog: number; plans: boolean; intents: boolean; danger: boolean;
   labels: boolean; weather: boolean; bloom: boolean; shadows: boolean;
 }
 
 export const DEFAULT_OVERLAYS: Overlays = {
-  territory: true, fronts: true, supply: false, fog: -1, plans: true, danger: false, labels: true, weather: true, bloom: true, shadows: true,
+  territory: true, fronts: true, supply: false, fog: -1, plans: true, intents: true, danger: false, labels: true, weather: true, bloom: true, shadows: true,
 };
+
+/** Every active commander's announced plan target (public story layer). `id` is the decision id. */
+export interface IntentOverlay { id: string; owner: number; faction: number; tile: number; kind: string; name: string }
+
+/** Director candidates from the story layer, best first (moment id, tile, freshness-weighted score). */
+export interface FocusPoint { id: number; tile: number; score: number }
 
 export type CameraMode = 'free' | 'follow' | 'operation' | 'director';
 export type CameraPreset = 'top' | 'oblique' | 'low';
@@ -57,6 +63,8 @@ export interface BattleView {
   commanderNames: Map<number, { name: string; faction: number; status: string }>;
   opInfo: { code: string; status: string; center: number; radius: number } | null;
   battles: { tile: number; intensity: number }[];
+  intents: IntentOverlay[];
+  focus: FocusPoint[];
 
   // callbacks
   onPick: (p: PickInfo) => void;

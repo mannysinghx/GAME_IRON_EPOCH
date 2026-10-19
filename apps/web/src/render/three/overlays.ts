@@ -4,8 +4,8 @@
 // commander's plan (animated arc, target and candidate rings, danger discs) and fog-view ghosts.
 
 import * as THREE from 'three';
-import type { PlanOverlay } from '../api.ts';
-import { CORNER_X, CORNER_Z, DIR_EDGE, FACTION_LIN, FACTION_SRGB, GROUND_Y, fIdx, linRGB, mixHex, factionHex, RGB, type Theatre } from './common.ts';
+import type { IntentOverlay, PlanOverlay } from '../api.ts';
+import { CORNER_X, CORNER_Z, DIR_EDGE, FACTION_LIN, FACTION_SRGB, GROUND_Y, INTENT_FRESH_MS, fIdx, linRGB, mixHex, factionHex, RGB, type Theatre } from './common.ts';
 import { DISC, HEX_LINE, P_GLOW, PointCloud, RING, RibbonBatch, SH_DIAMOND_LINE, pointsMaterial, type RingBatch, type SpriteBatch } from './batches.ts';
 import { TIME, fogUniforms, FOG_FACTOR_GLSL } from './materials.ts';
 import type { UnitLayer } from './units.ts';
@@ -302,6 +302,30 @@ export class OverlayLayer {
     B.seg(backX + wx, by + 0.25, backZ + wz, bx, by, bz, 0.14, lr, lg, lb, 0.95, 0.95);
     B.seg(backX - wx, by + 0.25, backZ - wz, bx, by, bz, 0.14, lr, lg, lb, 0.95, 0.95);
     B.end();
+  }
+
+  /**
+   * Every commander's announced target: a quiet faction ring that stays while the plan stands, and for a fresh
+   * announcement an expanding pulse and hex outline that fade out over INTENT_FRESH_MS. `skip` is drawn by drawPlan.
+   */
+  drawIntents(now: number, list: IntentOverlay[], age: (owner: number, now: number) => number, show: boolean, skip: number, rings: RingBatch): void {
+    const th = this.th;
+    if (!th || !show) return;
+    for (let i = 0; i < list.length; i++) {
+      const it = list[i];
+      if (it.owner === skip || !inTh(th, it.tile)) continue;
+      const fo = fIdx(it.faction);
+      const fr = FACTION_LIN[fo], fg = FACTION_LIN[fo + 1], fb = FACTION_LIN[fo + 2];
+      const x = th.x[it.tile], y = th.walk[it.tile] + 0.045, z = th.z[it.tile];
+      rings.push(x, y, z, 0.52, 0.05, RING, fr * 1.5, fg * 1.5, fb * 1.5, 0.45);
+      rings.push(x, y, z, 0.16, 0.05, DISC, fr * 1.4, fg * 1.4, fb * 1.4, 0.55, 0.8);
+      const a = age(it.owner, now);
+      if (a < 0 || a >= INTENT_FRESH_MS) continue;
+      const k = 1 - a / INTENT_FRESH_MS;
+      const q = (a % 1400) / 1400;
+      rings.push(x, y + 0.005, z, 0.6 + q * 1.9, 0.09, RING, fr * 2.4, fg * 2.4, fb * 2.4, (1 - q) * 0.85 * k);
+      rings.push(x, y, z, 1, 0.06, HEX_LINE, fr * 2, fg * 2, fb * 2, 0.55 * k);
+    }
   }
 
   /** Fog view: last-known enemy markers (stride 4: tile, cls, faction, age in ticks). */

@@ -45,6 +45,7 @@ export function serialize(w: World): string {
     ledger: w.ledger.st, npcs: w.npcs, wallet: w.wallet, weather: w.weather, chronicle: w.chronicle, chronId: w.chronId, series: w.series,
     evals: w.evals, evalCounter: w.evalCounter, decisionCounter: w.decisionCounter, opCounter: w.opCounter, usedNames: w.usedNames,
     narrative: w.narrative, battleHeat: [...w.battleHeat.entries()], shells: w.shells, hashHist: w.hashHist, deathsWindow: w.deathsWindow,
+    story: w.story?.save() ?? null,
   };
   return JSON.stringify(data);
 }
@@ -103,6 +104,9 @@ export function deserialize(text: string): World | null {
   w.shells = d.shells as World['shells'];
   w.hashHist = d.hashHist as World['hashHist'];
   w.deathsWindow = (d.deathsWindow as number[] | undefined) ?? [];
+  // presentation-only story records; snapshots from before the story layer resume with an empty one (no version bump:
+  // the world itself is unchanged, so discarding it would destroy history for nothing)
+  w.story?.load(d.story);
   // derived state
   w.ownerF = new Int8Array(n).fill(-1);
   w.cmdById.clear(); for (const c of w.cmds) w.cmdById.set(c.id, c);

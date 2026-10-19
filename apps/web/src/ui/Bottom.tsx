@@ -2,7 +2,7 @@ import { useState } from 'preact/hooks';
 import { FACTIONS } from '../shared/config.ts';
 import type { UiSnapshot } from '../shared/protocol.ts';
 import { Bar, Gauge, Lines, StackArea } from './charts.tsx';
-import { CAT_COLORS, compact, fcss, num, pct, simClock } from './format.ts';
+import { CAT_COLORS, compact, fcss, kindText, momentStyle, num, pct, planParts, planText, signed, simClock, simDur } from './format.ts';
 import { Icon } from './icons.tsx';
 import { Empty, Pill, Tabs } from './primitives.tsx';
 import { store, type BottomTab } from './store.ts';
@@ -17,6 +17,7 @@ export function Bottom({ ui }: { ui: UiSnapshot }) {
       <div class="bottom-tabs">
         <Tabs<BottomTab> value={tab} onChange={(v) => { store.bottomTab = v; store.emit(); }} options={[
           { id: 'chronicle', label: <>Chronicle <em class="mono">{compact(ui.world.events)}</em></> },
+          { id: 'story', label: <>Story <em class="mono">{compact(ui.story?.stats.moments ?? 0)}</em></> },
           { id: 'analytics', label: 'Analytics' },
           { id: 'proving', label: <>Proving ground <em class="mono">{ui.proving.matches}</em></> },
           { id: 'engine', label: 'Engine' },
@@ -25,6 +26,7 @@ export function Bottom({ ui }: { ui: UiSnapshot }) {
       </div>
       <div class="bottom-body">
         {tab === 'chronicle' && <Chronicle ui={ui} />}
+        {tab === 'story' && <StoryTab ui={ui} />}
         {tab === 'analytics' && <Analytics ui={ui} />}
         {tab === 'proving' && <Proving ui={ui} />}
         {tab === 'engine' && <Engine ui={ui} />}
@@ -34,7 +36,64 @@ export function Bottom({ ui }: { ui: UiSnapshot }) {
   );
 }
 
-const CATS = ['all', 'battle', 'territory', 'frontier', 'ops', 'market', 'lineage', 'diplomacy', 'team', 'policy', 'eval', 'build', 'chapter'];
+const CATS = ['all', 'story', 'battle', 'territory', 'frontier', 'ops', 'market', 'lineage', 'diplomacy', 'team', 'policy', 'eval', 'build', 'chapter'];
+
+// ------------------------------------------------------------------ story
+/** Plan board (every active commander's announced intent) with plan outcomes by kind, and the moment feed. */
+export function StoryTab({ ui }: { ui: UiSnapshot }) {
+  const st = ui.story;
+  if (!st) return <Empty>The story layer runs in the shared world only.</Empty>;
+  const t = ui.clock.tick;
+  const board = ui.commanders.filter((c) => c.status === 'active' && c.plan).sort((a, b) => b.plan!.started - a.plan!.started || a.id - b.id);
+  const rate = st.stats.closed ? st.stats.won / st.stats.closed : 0;
+  const kinds = st.kinds.filter((k) => k.n > 0).sort((a, b) => b.n - a.n);
+  return (
+    <div class="story">
+      <div class="st-col">
+        <div class="cc-head">Plan board <span class="dim">{board.length} live · newest first · verdict at next review</span></div>
+        <div class="st-stats" title="Closed plans by kind: share whose objective was met with a positive reward (sample size after the dot)">
+          <span class="mono"><b>{num(st.stats.announced)}</b> announced</span>
+          <span class="mono"><b>{pct(rate)}</b> ✔ of {num(st.stats.closed)}</span>
+          {kinds.map((k) => (
+            <span key={k.kind} class="ok-chip" style={{ '--okc': k.won / k.n >= 0.5 ? '#7ee2a8' : '#ffb547' }}>{kindText(k.kind)} <b class="mono">{pct(k.won / k.n)}</b><em class="mono">·{k.n}</em></span>
+          ))}
+        </div>
+        <div class="pb-h"><span>Commander</span><span>Committed to</span><span>Review</span><span>Record</span></div>
+        <div class="st-scroll">
+          {board.map((c) => {
+            const p = c.plan!;
+            const streak = c.rec.streak;
+            const [verb, object] = planParts(p.kind, p.target);
+            return (
+              <div class={`pb-row ${store.selected === c.id ? 'sel' : ''}`} key={c.id} onClick={() => { store.select(c.id); camera.focusTile(p.targetTile); }}
+                title={`${p.reason}${p.explored ? ' · exploratory pick' : ''} · score ${p.score.toFixed(2)}${p.alt ? ` vs ${p.alt.score.toFixed(2)}` : ''} · committed ${simDur(t - p.started)} ago`}>
+                <span class="pb-name"><i style={{ background: fcss(c.faction) }} />{c.name}</span>
+                <span class="pb-plan"><b>{verb}</b> {object}{p.explored && <em class="pb-x">explore</em>}{p.alt && <em class="pb-alt"> · over {planText(p.alt.kind, p.alt.target)} <span class="mono">{signed(p.score - p.alt.score, 2)}</span></em>}</span>
+                <span class="mono">{simDur(Math.max(0, p.reviewAt - t))}</span>
+                <span class="mono">{c.rec.won}/{c.rec.closed}{streak >= 3 ? <em class="pos"> ▲{streak}</em> : streak <= -3 ? <em class="neg"> ▼{-streak}</em> : null}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <div class="st-col">
+        <div class="cc-head">Moments <span class="dim">{st.stats.moments} detected · {st.stats.named} named rivalries · bar = weight</span></div>
+        <div class="st-scroll">
+          {st.moments.length === 0 ? <Empty>Moments appear as the war produces them: core falls, last stands, sites that keep changing hands, upsets, comebacks, streaks and rivalries.</Empty> : st.moments.map((m) => {
+            const [label, color] = momentStyle(m.kind);
+            return (
+              <div class="mo-row" key={m.id} onClick={() => { if (m.tile >= 0) camera.focusTile(m.tile); if (m.a[0] !== undefined) store.select(m.a[0]); }}>
+                <span class="mono dim">{simClock(m.tick)}</span>
+                <span class="mo-chip" style={{ '--mc': color }} title={`weight ${m.weight}`}>{label}<i style={{ width: `${m.weight}%` }} /></span>
+                <span class="mo-text" title={m.text}>{m.text}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function Chronicle({ ui }: { ui: UiSnapshot }) {
   const f = store.chronFilter, q = store.chronSearch.toLowerCase();

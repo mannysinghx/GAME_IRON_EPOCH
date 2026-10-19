@@ -131,6 +131,7 @@ function evaluateTreaties(w: World): void {
         t.endsAt = running ? running.endTick : w.tick + CLOCK.OP_RUN;
         w.factions[other].trust[me] = Math.max(0, w.factions[other].trust[me] - 15);
         w.log('diplomacy', `${sp.name} (${FACTIONS[me].name}) gave notice on the pact with ${FACTIONS[other].name}; it ends after one operation.`, me, [sp.id], -1);
+        w.story?.onNotice(w, sp, other);
         break;
       }
     }
@@ -160,6 +161,7 @@ function evaluateTreaties(w: World): void {
   w.rebuildWar();
   bumpReviews(w, [a, b]);
   w.log('diplomacy', `${FACTIONS[a].name} and ${FACTIONS[b].name} signed a two-campaign non-aggression pact while ${FACTIONS[leader].name} holds ${Math.round(share[leader] * 100)}% of world power. Termination only at windows, one operation of notice.`, a, [pa.id, pb.id], -1);
+  w.story?.onPact(w, a, b, leader, share[leader], [pa.id, pb.id]);
 }
 
 // ------------------------------------------------------------------ teams
@@ -315,6 +317,7 @@ function createDescendant(w: World, parent: Commander, occasion: string, mutRang
   for (const l of lessons) remember(w, child, { kind: 'LESSON', tile: l.tile, subject: l.subject, value: l.value, conf: Math.min(0.8, l.conf), tick: w.tick, src: `inherited from ${parent.name} (${l.kind.toLowerCase()})` });
   const mtxt = mutation.map((m) => `${m.param} ${before[DOCTRINE.indexOf(m.param as typeof DOCTRINE[number])]}→${before[DOCTRINE.indexOf(m.param as typeof DOCTRINE[number])] + m.delta}`).join(', ');
   w.log('lineage', `${parent.name} sponsored descendant ${child.name} (gen ${child.gen}${parents.length > 1 ? `, co-parent ${co!.name}` : ''}) for ${POP.SPONSOR_MERIT} merit. Mutation: ${mtxt}. Seed ${hex32(seed)}. No inherited skill rating.`, parent.faction, [parent.id, child.id], -1);
+  w.story?.onDescendant(w, parent, child);
   return child;
 }
 
@@ -398,6 +401,7 @@ export function findCoreSite(w: World, f: number): number {
 // ------------------------------------------------------------------ defeat
 export function onCoreDestroyed(w: World, c: Commander, killerId: number): void {
   const killer = w.cmdById.get(killerId);
+  w.story?.onCoreFell(w, c, killer, w.structById.get(c.coreId)?.tile ?? c.homeTile);
   c.status = 'reserve';
   c.reserveSince = w.tick;
   c.plan = null;
