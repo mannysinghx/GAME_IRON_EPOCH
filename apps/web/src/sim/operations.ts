@@ -30,8 +30,11 @@ export function tickOperations(w: World): void {
   const tick = w.tick;
   const pending = w.ops.find((o) => o.status === 'Open' || o.status === 'Scheduled' || o.status === 'Locked');
   const running = w.ops.find((o) => o.status === 'Running');
-  if (!pending && (!running || running.endTick - tick <= CLOCK.OP_OPEN_LEAD)) {
-    const start = running ? running.endTick + 25 : tick + CLOCK.OP_OPEN_LEAD;
+  // Back-to-back: the next operation deploys OP_LOCK_LEAD after the current one ends, so it locks (and takes over the
+  // seal, see syncRegion) the tick the current one finishes, and outsiders get the full lock lead to evacuate. Its
+  // market still opens OP_OPEN_LEAD before deployment.
+  if (!pending && (!running || running.endTick + CLOCK.OP_LOCK_LEAD - tick <= CLOCK.OP_OPEN_LEAD)) {
+    const start = running ? running.endTick + CLOCK.OP_LOCK_LEAD : tick + CLOCK.OP_OPEN_LEAD;
     createOperation(w, start);
   }
   for (const op of w.ops) {
@@ -63,13 +66,14 @@ export function tickOperations(w: World): void {
   }
 }
 
-function regionTiles(w: World, center: number, radius: number): number[] { return w.grid.within(center, radius); }
+/** Sealed region: open tiles within `radius`; closed frontier tiles take no part in an operation. */
+function regionTiles(w: World, center: number, radius: number): number[] { return w.grid.within(center, radius).filter((t) => w.active[t] === 1); }
 
 function createOperation(w: World, startTick: number): void {
   const g = w.grid;
   const recent = w.ops.slice(-3).map((o) => o.center);
   let best = -1, bestScore = -1e9, bestName = '';
-  const candidates = w.structs.filter((s) => s.kind === S.RELAY || s.kind === S.HUB || s.kind === S.CITADEL || s.kind === S.BRIDGE);
+  const candidates = w.structs.filter((s) => (s.kind === S.RELAY || s.kind === S.HUB || s.kind === S.CITADEL || s.kind === S.BRIDGE) && w.active[s.tile]);
   for (const st of candidates) {
     const counts = [0, 0, 0, 0];
     for (const t of g.within(st.tile, 9)) { const f = w.ownerF[t]; if (f >= 0) counts[f]++; }
@@ -108,14 +112,14 @@ function createOperation(w: World, startTick: number): void {
   const objectives: OpObjective[] = [{ tile: best, name: bestName, points: 3, holder: -1 }];
   for (const st of w.structs) {
     if (objectives.length >= 3) break;
-    if (st.tile === best || !STRUCTS[st.kind].capturable) continue;
+    if (st.tile === best || !STRUCTS[st.kind].capturable || !w.active[st.tile]) continue;
     if (g.dist(st.tile, best) <= radius - 1) objectives.push({ tile: st.tile, name: st.name, points: 2, holder: -1 });
   }
   const cpNames = ['CP Alpha', 'CP Bravo', 'CP Charlie'];
   for (let d = 0; d < 6 && objectives.length < 3; d += 2) {
     let t = best;
     for (let k = 0; k < 3; k++) { const v = g.nb[t * 6 + d]; if (v >= 0) t = v; }
-    if (w.moveCost[t] > 0 && !objectives.some((o) => o.tile === t)) objectives.push({ tile: t, name: cpNames[objectives.length - 1], points: 1, holder: -1 });
+    if (w.active[t] && w.moveCost[t] > 0 && !objectives.some((o) => o.tile === t)) objectives.push({ tile: t, name: cpNames[objectives.length - 1], points: 1, holder: -1 });
   }
   const id = ++w.opCounter;
   const seed = w.rng.u32();
@@ -132,6 +136,24 @@ function createOperation(w: World, startTick: number): void {
   w.log('ops', `${code} announced at ${bestName}: ${roster.map((r) => `${w.cmdName(r)} (${w.factionName(w.cmdById.get(r)!.faction)})`).join(', ')}. Market open; cutoff 30 s before deployment.`, -1, roster, best);
 }
 
+/**
+ * The sealed region is a pure function of the operations: the Running operation's region, else the Locked one's.
+ * Back-to-back operations are scheduled so the next locks the tick the current one finishes; should they ever
+ * overlap, the running contract keeps its seal to the end. Being derived, it restores exactly from a save.
+ */
+export function syncRegion(w: World): void {
+  const op = w.ops.find((o) => o.status === 'Running') ?? w.ops.find((o) => o.status === 'Locked');
+  const id = op ? op.id : -1;
+  if (id === w.regionOpId) return;
+  w.regionOpId = id;
+  w.regionMask.fill(0);
+  if (op) for (const t of op.region) w.regionMask[t] = 1;
+  w.rosterSet = new Set(op ? op.roster : []);
+  w.regionActive = !!op;
+  w.evacField = null;
+  w.flow.clear();
+}
+
 function lockOperation(w: World, op: Operation): void {
   const alive = op.roster.filter((id) => w.cmdById.get(id)?.status === 'active');
   if (alive.length < 2) {
@@ -142,12 +164,7 @@ function lockOperation(w: World, op: Operation): void {
   }
   op.status = 'Locked';
   // seal the region: non-roster forces evacuate and cannot fire across the boundary
-  w.regionMask.fill(0);
-  for (const t of op.region) w.regionMask[t] = 1;
-  w.rosterSet = new Set(op.roster);
-  w.regionActive = true;
-  w.evacField = null;
-  w.flow.clear();
+  syncRegion(w);
 }
 
 function scoreOperation(w: World, op: Operation): void {
@@ -166,11 +183,7 @@ function scoreOperation(w: World, op: Operation): void {
 
 function finishOperation(w: World, op: Operation): void {
   op.status = 'Provisional';
-  w.regionActive = false;
-  w.regionMask.fill(0);
-  w.rosterSet.clear();
-  w.flow.clear();
-  w.evacField = null;
+  syncRegion(w); // unseal, or hand the seal to an operation that locked while this one ran
   const ranked = op.roster
     .map((id) => {
       const held = op.objectives.filter((o) => o.holder === id).length;

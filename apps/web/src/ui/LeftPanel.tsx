@@ -1,9 +1,9 @@
 import { Fragment } from 'preact';
-import { FACTIONS, UNITS } from '../shared/config.ts';
+import { CHUNK, FACTIONS, FRONTIER, MAP_H, MAP_W, UNITS } from '../shared/config.ts';
 import type { CommanderView, UiSnapshot } from '../shared/protocol.ts';
 import { Bar, Spark } from './charts.tsx';
-import { compact, fcss, fname, num, pct, realEta, simClock, simDur } from './format.ts';
-import { FactionGlyph, ResIcon, UnitIcon } from './icons.tsx';
+import { FRONTIER_CSS, compact, fcss, fname, num, pct, realEta, simClock, simDur } from './format.ts';
+import { FactionGlyph, Icon, ResIcon, UnitIcon } from './icons.tsx';
 import { Empty, KV, Pill, Section, Stat, Tabs, statusTone } from './primitives.tsx';
 import { store } from './store.ts';
 
@@ -62,7 +62,67 @@ export function Theatre({ ui }: { ui: UiSnapshot }) {
         <Stat label="Structs" value={num(ui.world.structures)} sub="sites, bridges" />
         <Stat label="Max gen" value={`G${ui.world.generation}`} sub={`${ui.world.events} events`} />
       </div>
+      <FrontierCard ui={ui} />
     </Section>
+  );
+}
+
+/** Chunk states for the current theatre: 0 locked, 1 open, 2 opened by the latest expansion. */
+export function chunkStates(): { cols: number; rows: number; cells: number[] } {
+  const m = store.map;
+  if (!m || !m.active) {
+    // before the world loads: the published starting square
+    const cols = MAP_W / CHUNK, rows = MAP_H / CHUNK, lo = FRONTIER.initialMin, hi = FRONTIER.initialMax;
+    const cells: number[] = [];
+    for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) cells.push(i >= lo && i <= hi && j >= lo && j <= hi ? 1 : 0);
+    return { cols, rows, cells };
+  }
+  const ch = m.chunk || 16, cols = Math.ceil(m.w / ch), rows = Math.ceil(m.h / ch);
+  const fresh = new Set(store.newChunks);
+  const cells: number[] = [];
+  for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) {
+    const t = Math.min(m.h - 1, j * ch + (ch >> 1)) * m.w + Math.min(m.w - 1, i * ch + (ch >> 1));
+    cells.push(m.active[t] ? (fresh.has(j * cols + i) ? 2 : 1) : 0);
+  }
+  return { cols, rows, cells };
+}
+
+/** Tiny chunk map of the launch theatre (north up), used by the Theatre panel and the strategy guide. */
+export function ChunkGrid({ cell = 7, gap = 1.5 }: { cell?: number; gap?: number }) {
+  const st = chunkStates();
+  const W = st.cols * (cell + gap) - gap, H = st.rows * (cell + gap) - gap;
+  return (
+    <svg class="chunk-grid" width={W} height={H} viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`${st.cells.filter((c) => c > 0).length} of ${st.cells.length} frontier chunks open`}>
+      {st.cells.map((c, k) => (
+        <rect key={k} x={(k % st.cols) * (cell + gap)} y={Math.floor(k / st.cols) * (cell + gap)} width={cell} height={cell} rx={1.2} class={c === 2 ? 'cg-new' : c === 1 ? 'cg-open' : 'cg-locked'} />
+      ))}
+    </svg>
+  );
+}
+
+function FrontierCard({ ui }: { ui: UiSnapshot }) {
+  const f = ui.frontier;
+  if (!f) return null;
+  const left = Math.max(0, f.nextTick - ui.clock.tick);
+  const toNext = f.done ? 1 : Math.max(0, Math.min(1, 1 - left / FRONTIER.interval));
+  return (
+    <div class="frontier-card" title={`The theatre opens one chunk per quadrant every ${Math.round(FRONTIER.interval / 300)} simulated minutes (mirrored for balance) up to the launch theatre. Locked land is visible but impassable.`}>
+      <ChunkGrid />
+      <div class="fr-body">
+        <div class="fr-head"><Icon name="expand" size={12} /><span>Frontier</span><b class="mono">{f.open}<em>/{f.total}</em></b><span class="dim">chunks open</span></div>
+        <Bar value={f.open} max={f.total} color={FRONTIER_CSS} h={4} />
+        <div class="fr-kv">
+          <span>Active cap</span><b class="mono">{f.activeCap}</b>
+          <span>Per faction</span><b class="mono">{f.factionCap}</b>
+        </div>
+        {f.done ? <div class="fr-done">Launch theatre fully open</div> : (
+          <div class="prog-row fr-next" title="Time to the next frontier expansion">
+            <span>Next</span><Bar value={toNext} color={FRONTIER_CSS} h={4} /><span class="mono">{realEta(left, ui.speed, ui.paused)}</span>
+          </div>
+        )}
+        {f.lastOpened.length > 0 && <div class="fr-last" title={f.lastOpened.join(', ')}>new: {f.lastOpened.slice(0, 4).join(' · ')}</div>}
+      </div>
+    </div>
   );
 }
 
@@ -229,6 +289,7 @@ export function Schedule({ ui }: { ui: UiSnapshot }) {
     rows.push({ label: `${next.code} deploys`, at: next.startTick, note: `${next.roster.length} commanders` });
   }
   if (ui.operation && ui.operation.status === 'Running') rows.push({ label: `${ui.operation.code} final tick`, at: ui.operation.endTick, note: ui.operation.name });
+  if (ui.frontier && !ui.frontier.done) rows.push({ label: 'Frontier expansion', at: ui.frontier.nextTick, note: `+${FRONTIER.perEvent} chunks · ${ui.frontier.open}/${ui.frontier.total} open` });
   rows.push({ label: 'Campaign muster & charters', at: ui.clock.nextCampaignTick, note: 'treaty window' });
   rows.push({ label: 'Chapter boundary', at: ui.clock.nextChapterTick, note: 'festival cohort' });
   for (const w of ui.weather) if (w.end > t) rows.push({ label: w.active ? `${w.name} (active)` : w.name, at: w.active ? w.end : w.start, note: w.active ? 'clears' : 'arrives' });

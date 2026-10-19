@@ -6,8 +6,16 @@ commanders, and predict operation outcomes with free, nonredeemable virtual cred
 change an army's decisions.
 
 This is the design doc's **private browser sandbox**: the whole authoritative world runs in a Web Worker in
-your tab and persists to IndexedDB. Nothing calls an external service at runtime (fonts, scripts and workers
-are bundled and served by the host).
+your tab and persists to IndexedDB. Nothing calls an external service at runtime (fonts, scripts, workers and
+three.js are bundled and served by the host).
+
+- **3D battlefield** (three.js): zoom, yaw, tilt and pan anywhere; presets Top / Oblique / Low; bloom and soft
+  shadows (toggle in Layers).
+- **Expanding frontier**: the simulated theatre starts as the central 64 × 64 of a 128 × 128 map and opens four
+  mirrored 16 × 16 chunks every 20 simulated minutes, each with new sites and a founding wave of commanders,
+  until the 128 × 128 launch budget is reached (design §3.4). Beyond it the land continues forever as streamed,
+  non-simulated scenery generated from the same terrain field, so there is no seam.
+- **Game Strategy** button (top bar) opens a guide to how the war works and how to read and predict it.
 
 ## Run
 
@@ -28,8 +36,10 @@ Open http://127.0.0.1:5317. Other scripts: `npm test` (headless simulation check
 | Right column | 07 Featured operation (phase machine, live objective race, objectives, seed commitment/reveal, recent results) · 08 Prediction desk (wallet, pari-mutuel markets with pools, shares and estimated returns, stake caps, receipts) · 09 Agent dossier (separate records, current plan, last review's candidate plans with doctrine U / learned L / score, doctrine radar with mutations, online-learning stats and learned weights, memory facts, decision log, lineage, forces, policy versions) |
 | Bottom strip | Chronicle (filter + search) · Analytics (territory share, faction power, learning curve, Elo) · Proving ground (equal-budget ratings with Wilson intervals, recent duels) · Engine (tick p50/p95/p99 against the 200 ms budget, bounded caches, state hash history, snapshot, new world) · Ledger (invariants, totals, recent postings) |
 
-Keys: `Space` pause · `1–6` speed · `F` follow · `O` operation camera · `D` director (hottest battle) ·
-`G` free · `+/−` zoom · `0` fit · `[ ]` cycle commanders · `V` cycle fog view · `?` help.
+Camera: drag to pan, right-drag or shift-drag to rotate and tilt, wheel or pinch to zoom, double-click to fly to
+a point. Keys: arrows pan · `Q/E` rotate · `Z/C` tilt · `+/−` zoom · `0` fit · `N` north · `F` follow ·
+`O` operation · `D` director · `G` free · `Space` pause · `1–6` speed · `[ ]` cycle commanders · `V` fog view ·
+`?` help.
 
 ## What the agents actually do
 
@@ -67,10 +77,12 @@ only) create pools so markets have depth; they are labelled as such in code.
 
 ## Verified
 
-`npm test` (6,000 ticks): identical state hashes for identical seeds; save → restore → +500 ticks yields an
-identical hash; ledger balances after every tick; stake cap, idempotency and one-outcome rules enforced;
-apportionment conserves pools; populations and memory bounded; 0 validator-rejected orders. Tick cost on
-this machine: p50 ≈ 0.1 ms, p95 ≈ 0.6 ms against a 200 ms budget.
+`npm test` (12,000 ticks): identical state hashes for identical seeds; save → restore → +500 ticks yields an
+identical hash, including after a frontier opening; ledger balances after every tick; stake cap, idempotency
+and one-outcome rules enforced; apportionment conserves pools; populations and memory bounded; frontier opens
+on schedule with every site instantiated exactly once and no squad ever on closed land; 0 validator-rejected
+orders. Tick cost on this machine: p50 0.20 / p95 0.71 / p99 1.09 ms; at the 24-commander launch load
+(~315 squads) p95 ≈ 1.6 ms, against a 200 ms budget.
 
 ## Layout
 
@@ -80,6 +92,7 @@ apps/web/src/
   sim/      world (tick loop, combat, LOS, supply, economy), agents (planner, learning, memory),
             society (musters, lineage, teams, treaties, weather), operations, market, ledger,
             view builders, persistence, world worker, proving-ground worker, selftest
-  render/   PixiJS renderer and procedural textures
+  render/   api.ts (renderer contract) and three/ (3D renderer: terrain, endless scenery, units,
+            structures, effects, overlays, labels, camera rig)
   ui/       Preact panels, charts, store, styles
 ```

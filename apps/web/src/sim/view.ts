@@ -1,12 +1,12 @@
 // Builds spectator views from committed world state. Views are read-only projections: frames for the
 // renderer, a UI snapshot for the side panels, and an agent dossier for the selected commander.
 
-import { CLOCK, DOCTRINE, FACTIONS, FEATURES, PLAN_NAMES, POP, STRUCTS, UNITS, U } from '../shared/config.ts';
+import { CHUNK, CLOCK, DOCTRINE, FACTIONS, FEATURES, PLAN_NAMES, POP, S, STRUCTS, UNITS, U } from '../shared/config.ts';
 import { hex32 } from '../shared/rng.ts';
 import {
   FX_STRIDE, SF, STRUCT_STRIDE, UF, UNIT_STRIDE,
-  type CommanderView, type Dossier, type FactionView, type FrameMsg, type MapStatic, type MarketView, type OperationView,
-  type PerfView, type PlanView, type TeamView, type UiSnapshot,
+  type CommanderView, type Dossier, type FactionView, type FrameMsg, type FrontierMsg, type FrontierView, type MapStatic,
+  type MarketView, type OperationView, type PerfView, type PlanView, type SiteInfo, type TeamView, type UiSnapshot,
 } from '../shared/protocol.ts';
 import type { World } from './world.ts';
 import { TASK, TASK_NAMES, type Commander, type Operation, type Team } from './types.ts';
@@ -28,11 +28,29 @@ export function newViewState(): ViewState {
   return { lastChronId: 0, seriesVersion: -1, viewFaction: -1, lastTerritory: -1, lastSupplyTick: -1, opRegionKey: '', selected: -1 };
 }
 
+/** Named map features currently in the world: capturable sites and bridges (frontier ones appear when opened). */
+function siteList(w: World): SiteInfo[] {
+  return w.structs.filter((s) => STRUCTS[s.kind].capturable || s.kind === S.BRIDGE).map((s) => ({ id: s.id, kind: s.kind, tile: s.tile, name: s.name }));
+}
+
 export function buildStatic(w: World): MapStatic {
   return {
     w: w.map.w, h: w.map.h, seed: w.seed, worldId: w.worldId, rulesVersion: w.rulesVersion(),
     terrain: w.terrain.slice(), elev: w.elev.slice(), variant: w.map.variant.slice(),
-    sites: w.structs.filter((s) => STRUCTS[s.kind].capturable || s.kind === 4).map((s) => ({ id: s.id, kind: s.kind, tile: s.tile, name: s.name })),
+    sites: siteList(w), active: w.active.slice(), chunk: CHUNK,
+  };
+}
+
+/** Frontier update: the full active mask and site list. `initial` (sent right after the static map) lists no openings. */
+export function buildFrontier(w: World, initial = false): FrontierMsg {
+  return { type: 'frontier', active: w.active.slice(), sites: siteList(w), opened: initial ? [] : w.lastOpenedChunks(), version: w.frontierVersion };
+}
+
+export function frontierView(w: World): FrontierView {
+  const total = w.chunkCount();
+  return {
+    open: w.chunksOpen.length, total, nextTick: w.nextFrontierTick, done: total > 0 && w.chunksOpen.length >= total,
+    lastOpened: w.lastOpenedChunks().map((ci) => w.chunkName(ci)), activeCap: w.activeCap(), factionCap: w.factionCapBase(),
   };
 }
 
@@ -262,6 +280,7 @@ export function buildUi(w: World, vs: ViewState, speed: number, paused: boolean,
     proving: { matches: w.evalCounter, running: proving.running, recent: w.evals.slice(-12).reverse() },
     battles,
     narrative: w.narrative.slice(-6),
+    frontier: frontierView(w),
   };
 }
 

@@ -2,8 +2,8 @@
 // Nothing here can alter an army's decisions — the worker only accepts ledger and viewing commands.
 
 import { useEffect, useState } from 'preact/hooks';
-import type { ChronEvent, ClientCmd, Dossier, FrameMsg, MapStatic, SeriesView, UiSnapshot, WorkerMsg, EvalMatch, EvalResult } from '../shared/protocol.ts';
-import type { CameraMode, Overlays } from '../render/renderer.ts';
+import type { ChronEvent, ClientCmd, Dossier, FrameMsg, FrontierMsg, MapStatic, SeriesView, UiSnapshot, WorkerMsg, EvalMatch, EvalResult } from '../shared/protocol.ts';
+import { DEFAULT_OVERLAYS, type CameraMode, type Overlays, type PickInfo } from '../render/api.ts';
 
 export interface Toast { id: number; level: 'ok' | 'warn' | 'err' | 'info'; text: string; at: number }
 
@@ -21,7 +21,7 @@ class Store {
   resumed = false;
   fps = 0;
   selected = -1;
-  overlays: Overlays = { territory: true, fronts: true, supply: false, fog: -1, plans: true, danger: false, labels: true, weather: true };
+  overlays: Overlays = { ...DEFAULT_OVERLAYS };
   camera: CameraMode = 'free';
   bottomTab: BottomTab = 'chronicle';
   mobileTab: MobileTab = 'map';
@@ -29,7 +29,12 @@ class Store {
   collapsed: Record<string, boolean> = loadCollapsed();
   chronFilter = 'all';
   chronSearch = '';
-  hover: import('../render/renderer.ts').PickInfo | null = null;
+  hover: PickInfo | null = null;
+  /** Latest frontier unlock (kept so a renderer that attaches late can still apply it after setStatic). */
+  frontier: FrontierMsg | null = null;
+  /** Chunk indices (cy * chunksX + cx) opened by the latest unlock, diffed from the previous active mask. */
+  newChunks: number[] = [];
+  frontierAt = 0; // performance.now() of the latest unlock that opened chunks (drives the map flash)
   hoverListeners = new Set<() => void>();
   version = 0;
   private listeners = new Set<() => void>();
@@ -38,13 +43,14 @@ class Store {
   proving: Worker | null = null;
   onFrame: (f: FrameMsg) => void = () => {};
   onStatic: (m: MapStatic) => void = () => {};
+  onFrontier: (f: FrontierMsg) => void = () => {};
 
   emit(): void { this.version++; for (const l of this.listeners) l(); }
   subscribe(fn: () => void): () => void { this.listeners.add(fn); return () => this.listeners.delete(fn); }
 
   send(cmd: ClientCmd): void { this.worker?.postMessage(cmd); }
 
-  setHover(p: import('../render/renderer.ts').PickInfo | null): void {
+  setHover(p: PickInfo | null): void {
     this.hover = p;
     for (const l of this.hoverListeners) l();
   }
@@ -86,9 +92,29 @@ class Store {
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') this.send({ type: 'save' }); });
   }
 
+  private applyFrontier(m: FrontierMsg): void {
+    const prev = this.map;
+    if (prev) {
+      // diff at chunk level so panels can highlight what just opened without trusting `opened` semantics
+      const ch = prev.chunk || 16, cx = Math.ceil(prev.w / ch), cy = Math.ceil(prev.h / ch);
+      const fresh: number[] = [];
+      for (let j = 0; j < cy; j++) for (let i = 0; i < cx; i++) {
+        const t = Math.min(prev.h - 1, j * ch + (ch >> 1)) * prev.w + Math.min(prev.w - 1, i * ch + (ch >> 1));
+        if (m.active[t] && !prev.active[t]) fresh.push(j * cx + i);
+      }
+      if (fresh.length) { this.newChunks = fresh; this.frontierAt = performance.now(); }
+      // new object, not a mutation: the renderer may still hold the previous MapStatic
+      this.map = { ...prev, active: m.active, sites: m.sites };
+    }
+    this.frontier = m;
+    this.onFrontier(m);
+    this.emit();
+  }
+
   private handle(m: WorkerMsg): void {
     switch (m.type) {
-      case 'static': this.map = m.map; this.chronicle = []; this.series = null; this.onStatic(m.map); this.emit(); break;
+      case 'static': this.map = m.map; this.chronicle = []; this.series = null; this.frontier = null; this.newChunks = []; this.onStatic(m.map); this.emit(); break;
+      case 'frontier': this.applyFrontier(m); break;
       case 'frame': this.onFrame(m); break;
       case 'ui': {
         this.ui = m.ui;

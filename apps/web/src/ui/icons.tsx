@@ -57,6 +57,25 @@ export function Icon({ name, size = 14 }: { name: string; size?: number }) {
     case 'close': return <svg {...p}><path d="M4 4l8 8M12 4l-8 8" /></svg>;
     case 'dna': return <svg {...p}><path d="M4 1.5c0 4 8 4 8 6.5S4 10.5 4 14.5M12 1.5c0 4-8 4-8 6.5s8 2.5 8 6.5M5 4h6M5 12h6" /></svg>;
     case 'brain': return <svg {...p}><path d="M6 2.5a2 2 0 0 0-2 2 2 2 0 0 0-1.5 3.3A2.2 2.2 0 0 0 4 11.5a2 2 0 0 0 2 2V2.5zM10 2.5a2 2 0 0 1 2 2 2 2 0 0 1 1.5 3.3 2.2 2.2 0 0 1-1.5 3.7 2 2 0 0 1-2 2V2.5zM6 7h4" /></svg>;
+    case 'bulb': return <svg {...p}><path d="M5.6 10.6C4.3 9.7 3.5 8.3 3.5 6.6a4.5 4.5 0 0 1 9 0c0 1.7-.8 3.1-2.1 4v1.4H5.6z" /><path d="M6.2 14.3h3.6M8 7.2v2.6M6.8 8.2 8 7l1.2 1.2" /></svg>;
+    case 'compass': return <svg {...p}><circle cx="8" cy="8" r="6.5" /><path d="M10.6 5.4 9.1 9.1 5.4 10.6 6.9 6.9z" fill="currentColor" /></svg>;
+    case 'rotl': return <svg {...p}><path d="M3.2 9.2A5 5 0 1 0 4.6 4.4" /><path d="M2.6 1.9v3.2h3.2" /></svg>;
+    case 'rotr': return <svg {...p}><path d="M12.8 9.2a5 5 0 1 1-1.4-4.8" /><path d="M13.4 1.9v3.2h-3.2" /></svg>;
+    case 'tiltu': return <svg {...p}><path d="M1.8 14h12.4l-2.6-4H4.4z" /><path d="M8 7.6V1.8M5.9 3.9 8 1.8l2.1 2.1" /></svg>;
+    case 'tiltd': return <svg {...p}><path d="M1.8 14h12.4l-2.6-4H4.4z" /><path d="M8 1.8v5.8M5.9 5.5 8 7.6l2.1-2.1" /></svg>;
+    case 'cube': return <svg {...p}><path d="M8 1.5 14 4.8v6.4L8 14.5 2 11.2V4.8z" /><path d="M2 4.8 8 8l6-3.2M8 8v6.5" /></svg>;
+    case 'flag': return <svg {...p}><path d="M3.5 14.5V2M3.5 2.5h8.5l-2 3 2 3H3.5" /></svg>;
+    case 'coin': return <svg {...p}><circle cx="8" cy="8" r="6.3" /><path d="M8 4.4 11.1 8 8 11.6 4.9 8z" /></svg>;
+    case 'route': return <svg {...p}><circle cx="3.6" cy="12.4" r="1.8" /><circle cx="12.4" cy="3.6" r="1.8" /><path d="M5.2 11.4c2.2-.9 1.2-4 3.2-5s2.4-.2 3-1.2" /></svg>;
+    case 'expand': return <svg {...p}><rect x="5.2" y="5.2" width="5.6" height="5.6" rx=".6" /><path d="M1.5 4.8V1.5h3.3M11.2 1.5h3.3v3.3M14.5 11.2v3.3h-3.3M4.8 14.5H1.5v-3.3" /></svg>;
+    case 'keyboard': return <svg {...p}><rect x="1.5" y="4" width="13" height="8.5" rx="1.5" /><path d="M4 6.9h.8M7 6.9h.8M10 6.9h2M4 9.7h8" /></svg>;
+    case 'mouse': return <svg {...p}><rect x="4.5" y="1.5" width="7" height="13" rx="3.5" /><path d="M8 4v2.4" /></svg>;
+    case 'clock': return <svg {...p}><circle cx="8" cy="8" r="6.5" /><path d="M8 4.5V8l2.4 1.5" /></svg>;
+    case 'lock': return <svg {...p}><rect x="3" y="7" width="10" height="7.5" rx="1.5" /><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" /></svg>;
+    case 'chart': return <svg {...p}><path d="M2 14h12M4 11.5V8M7.3 11.5V4.5M10.6 11.5V6.5M13.5 2.5l-3 2.4-3.2-1.6L4 5.6" /></svg>;
+    case 'arrow': return <svg {...p}><path d="M2.5 8h10M9 4.5 12.5 8 9 11.5" /></svg>;
+    case 'map': return <svg {...p}><path d="M1.5 3.6 5.5 2l5 1.8 4-1.5v10.1l-4 1.6-5-1.8-4 1.6z" /><path d="M5.5 2v10.2M10.5 3.8V14" /></svg>;
+    case 'swords': return <svg {...p}><path d="M2 2l8.5 8.5M14 2 5.5 10.5M9 12l3-3M7 12 4 9M11.3 11.3l2.7 2.7M4.7 11.3 2 14" /></svg>;
   }
   return null;
 }

@@ -1,5 +1,5 @@
 import { useState } from 'preact/hooks';
-import { DOCTRINE, FACTIONS, UNITS } from '../shared/config.ts';
+import { DOCTRINE, FACTIONS, POP, UNITS } from '../shared/config.ts';
 import type { Dossier, MarketView, OperationView, UiSnapshot } from '../shared/protocol.ts';
 import { Bar, Lines, Radar, Spark, WeightBars } from './charts.tsx';
 import { fcss, fname, num, pct, realEta, shortHash, signed, simClock, simDur } from './format.ts';
@@ -73,7 +73,7 @@ export function Operation({ ui }: { ui: UiSnapshot }) {
             {op.objectives.map((o) => {
               const c = name(o.holder);
               return (
-                <span class="obj" key={o.tile} onClick={() => camera.focusTile(o.tile, 1.5)} title={`${o.points} pts per second held`}>
+                <span class="obj" key={o.tile} onClick={() => camera.focusTile(o.tile)} title={`${o.points} pts per second held`}>
                   <i style={{ background: c ? fcss(c.faction) : '#3a4150' }} />{o.name}<em>×{o.points}</em>
                 </span>
               );
@@ -86,7 +86,7 @@ export function Operation({ ui }: { ui: UiSnapshot }) {
             <KV k="Result" v={<span>{op.result ?? '—'}</span>} />
           </div>
           <div class="btn-row">
-            <button class="btn" onClick={() => { camera.setMode('operation'); camera.focusTile(op.regionCenter, 1.3); }}><Icon name="target" size={13} /> Watch region</button>
+            <button class="btn" onClick={() => camera.setMode('operation')}><Icon name="target" size={13} /> Watch region</button>
             <button class="btn ghost" onClick={() => { const lead = op.scores.slice().sort((a, b) => b.score - a.score)[0]; if (lead) { store.select(lead.id); camera.setMode('follow'); } }}><Icon name="follow" size={13} /> Follow leader</button>
           </div>
         </>
@@ -97,7 +97,7 @@ export function Operation({ ui }: { ui: UiSnapshot }) {
           {ui.recentOps.slice(0, 4).map((o) => {
             const w = name(o.winner);
             return (
-              <div class="row" key={o.id} onClick={() => camera.focusTile(o.regionCenter, 1.2)}>
+              <div class="row" key={o.id} onClick={() => camera.focusTile(o.regionCenter)}>
                 <span class="mono dim">{o.code}</span>
                 <span class="grow">{o.name}</span>
                 {w ? <span><i class="dot" style={{ background: fcss(w.faction) }} /> {w.name}</span> : <span class="dim">{o.result ?? '—'}</span>}
@@ -251,7 +251,7 @@ export function DossierPanel({ ui, d }: { ui: UiSnapshot; d: Dossier | null }) {
         <div class="plan-card" style={{ '--fc': col }}>
           <div class="plan-top">
             <span class="plan-kind">{d.plan.kind.replace('_', ' ')}</span>
-            <span class="plan-target" onClick={() => camera.focusTile(d.plan!.targetTile, 1.4)}>{d.plan.target}</span>
+            <span class="plan-target" onClick={() => camera.focusTile(d.plan!.targetTile)}>{d.plan.target}</span>
           </div>
           <div class="plan-meta">
             <Pill tone={d.plan.reason.startsWith('LEARNED') ? 'info' : d.plan.explored ? 'warn' : 'muted'}>{d.plan.reason}</Pill>
@@ -267,7 +267,7 @@ export function DossierPanel({ ui, d }: { ui: UiSnapshot; d: Dossier | null }) {
           {lastDec.candidates.map((c, i) => {
             const max = Math.max(...lastDec.candidates.map((x) => x.score)), min = Math.min(...lastDec.candidates.map((x) => x.score));
             return (
-              <div class={`cand ${c.chosen ? 'chosen' : ''}`} key={i} onClick={() => camera.focusTile(c.tile, 1.3)} title={d.featureNames.map((f, k) => `${f} ${c.feats[k]}`).join('\n')}>
+              <div class={`cand ${c.chosen ? 'chosen' : ''}`} key={i} onClick={() => camera.focusTile(c.tile)} title={d.featureNames.map((f, k) => `${f} ${c.feats[k]}`).join('\n')}>
                 <span class="cand-name"><b>{c.kind.replace('_', ' ').toLowerCase()}</b> {c.target}</span>
                 <span class="mono">{c.U.toFixed(2)}</span>
                 <span class={`mono ${c.L >= 0 ? 'pos' : 'neg'}`}>{signed(c.L, 2)}</span>
@@ -301,7 +301,7 @@ export function DossierPanel({ ui, d }: { ui: UiSnapshot; d: Dossier | null }) {
       <div class="mini-head">Memory <span class="dim">{d.memory.length}/24 facts · provenance, age, confidence</span></div>
       <div class="memory">
         {d.memory.length === 0 ? <Empty>No facts yet.</Empty> : d.memory.slice(0, 10).map((m, i) => (
-          <div class={`mem mem-${m.kind.toLowerCase()}`} key={i} onClick={() => m.tile >= 0 && camera.focusTile(m.tile, 1.4)}>
+          <div class={`mem mem-${m.kind.toLowerCase()}`} key={i} onClick={() => m.tile >= 0 && camera.focusTile(m.tile)}>
             <span class="mem-k">{m.kind.replace('_', ' ')}</span>
             <span class="mem-t">{m.kind === 'OPP_TENDENCY' ? `${m.src} ×${m.value}` : `${m.place}${m.kind === 'PLAN_OUTCOME' ? ` · ${m.value >= 0 ? '+' : ''}${m.value}` : ''}`}<em>{m.kind === 'OPP_TENDENCY' ? '' : m.src}</em></span>
             <span class="mem-c"><Bar value={m.conf} color={m.kind === 'DANGER' ? '#ff5d5d' : m.kind === 'LESSON' ? '#c08cff' : '#7fe7ff'} h={3} /></span>
@@ -328,7 +328,7 @@ export function DossierPanel({ ui, d }: { ui: UiSnapshot; d: Dossier | null }) {
             {d.lineage.ancestors.slice().reverse().map((a) => <span key={a.id} class="lin" onClick={() => store.select(a.id)}>{a.name} <em>G{a.gen}</em></span>)}
             <span class="lin self">{d.name} <em>G{d.gen}</em></span>
             {d.lineage.children.map((c) => <span key={c.id} class="lin child" onClick={() => store.select(c.id)}>↳ {c.name} <em>G{c.gen} · {c.status}</em></span>)}
-            {d.lineage.ancestors.length === 0 && d.lineage.children.length === 0 && <span class="dim tiny">Founding identity, no descendants yet. Sponsorship needs {200} merit and 20 completed plans.</span>}
+            {d.lineage.ancestors.length === 0 && d.lineage.children.length === 0 && <span class="dim tiny">Founding identity, no descendants yet. Sponsoring one needs {POP.SPONSOR_PLANS} plans chosen and {POP.SPONSOR_MERIT} merit, at most once per campaign.</span>}
           </div>
         </div>
         <div>

@@ -6,7 +6,7 @@ import { store } from './store.ts';
 
 const SPEEDS = [1, 2, 4, 8, 16, 32];
 
-export function TopBar({ ui, onHelp }: { ui: UiSnapshot | null; onHelp: () => void }) {
+export function TopBar({ ui, onHelp, onStrategy, strategySeen }: { ui: UiSnapshot | null; onHelp: () => void; onStrategy: () => void; strategySeen: boolean }) {
   const paused = ui?.paused ?? false;
   const speed = ui?.speed ?? 2;
   const op = ui?.operation ?? ui?.nextOperation ?? null;
@@ -20,6 +20,10 @@ export function TopBar({ ui, onHelp }: { ui: UiSnapshot | null; onHelp: () => vo
         </div>
       </div>
       <div class={`live ${paused ? 'paused' : ''}`}><i />{paused ? 'PAUSED' : 'LIVE'}</div>
+      <button class={`strategy-btn ${strategySeen ? '' : 'pulse'}`} onClick={onStrategy} title="Game strategy: what the commanders fight for, how they think, and how to predict well" aria-haspopup="dialog">
+        <Icon name="bulb" size={15} />
+        <span class="sb-long">Game Strategy</span><span class="sb-short">Strategy</span>
+      </button>
       {ui && (
         <div class="clock">
           <span class="clk-seg">CH {roman(ui.clock.chapter)}</span>

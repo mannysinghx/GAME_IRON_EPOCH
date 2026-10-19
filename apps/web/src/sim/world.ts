@@ -3,21 +3,21 @@
 // except spectator ledger commands, which never touch battle state.
 
 import {
-  CLOCK, DMG_MATRIX, FACTIONS, MAP_H, MAP_W, NEUTRAL_MODS, POP, RULES_VERSION, S, STRUCTS, T, TERRAIN, U, UNITS,
+  CHUNK, CLOCK, DMG_MATRIX, FACTIONS, FRONTIER, MAP_H, MAP_W, NEUTRAL_MODS, POP, RULES_VERSION, S, STRUCTS, T, TERRAIN, U, UNITS,
   type FactionMods,
 } from '../shared/config.ts';
 import { HexGrid } from '../shared/hex.ts';
 import { FNV_SEED, Rng, fnv, hex32 } from '../shared/rng.ts';
 import { FX, STRUCT_ID_BASE } from '../shared/protocol.ts';
 import type { PolicySnapshot } from '../shared/protocol.ts';
-import { generateDuelMap, generateWorldMap, type MapData } from './mapgen.ts';
+import { frontierPlan, generateDuelMap, generateWorldMap, type FrontierPlan, type MapData } from './mapgen.ts';
 import { FlowCache, INF } from './pathing.ts';
 import {
   TASK, type ChronEntry, type Commander, type EvalRecord, type FactionState, type LedgerState, type Market, type Npc,
   type Operation, type Series, type Squad, type Struct, type Team, type Treaty, type Wallet, type Weather,
 } from './types.ts';
 import { runOperational, runStrategic, noteLoss, makeCommander } from './agents.ts';
-import { foundingMuster, clockEvents, onCoreDestroyed, emergencyCheck } from './society.ts';
+import { foundingMuster, clockEvents, onCoreDestroyed, emergencyCheck, frontierMuster } from './society.ts';
 import { tickOperations } from './operations.ts';
 import { tickMarkets, initMarkets } from './market.ts';
 import { Ledger } from './ledger.ts';
@@ -26,7 +26,7 @@ export type Mode = 'world' | 'duel';
 
 interface Shell { impact: number; tile: number; dmg: number; owner: number; faction: number; primary: number }
 
-const CHUNK = 8;
+const BUCKET = 8; // spatial bucket edge for squad proximity queries (unrelated to frontier chunks)
 
 export class World {
   readonly mode: Mode;
@@ -45,6 +45,15 @@ export class World {
   regionMask: Uint8Array;
   occupancy: Uint8Array;
   nearMask: Uint8Array;
+  /** 1 = tile lies in an open chunk. Closed tiles are visible land but impassable, unownable and never targeted. */
+  active: Uint8Array;
+  chunksOpen: number[] = [];
+  /** Tick each chunk opened (-1 = initial or still closed); commanders treat recently opened land as new ground. */
+  chunkOpenTick: Int32Array;
+  frontierVersion = 0;
+  nextFrontierTick = -1;
+  /** Opening schedule regenerated from the seed (world mode only). */
+  readonly frontier: FrontierPlan | null;
 
   tick = 0;
   nextId = 1;
@@ -86,6 +95,7 @@ export class World {
   war: Uint8Array = new Uint8Array(16);
   rosterSet = new Set<number>();
   regionActive = false;
+  regionOpId = -1; // operation whose region is sealed (derived from ops; see operations.ts syncRegion)
   fx: number[] = [];
   recordFx = true;
   territoryDirty = true;
@@ -118,7 +128,19 @@ export class World {
     this.occupancy = new Uint8Array(n);
     this.nearMask = new Uint8Array(n);
     this.jam = new Uint8Array(n);
-    this.bucketHead = new Int32Array(Math.ceil(this.map.w / CHUNK) * Math.ceil(this.map.h / CHUNK));
+    this.capF = new Int8Array(n); this.capC = new Int16Array(n); this.capR = new Uint8Array(n); this.capX = new Uint8Array(n);
+    this.active = new Uint8Array(n);
+    this.chunkOpenTick = new Int32Array(Math.ceil(this.map.w / CHUNK) * Math.ceil(this.map.h / CHUNK)).fill(-1);
+    if (mode === 'world') {
+      this.frontier = frontierPlan(this.seed, this.map.w, this.map.h);
+      for (const ci of this.frontier.initial) this.markChunk(ci);
+      this.chunksOpen = this.frontier.initial.slice();
+      this.nextFrontierTick = FRONTIER.firstAt;
+    } else {
+      this.frontier = null;
+      this.active.fill(1);
+    }
+    this.bucketHead = new Int32Array(Math.ceil(this.map.w / BUCKET) * Math.ceil(this.map.h / BUCKET));
     this.rng = new Rng(this.seed);
     this.marketRng = new Rng(this.seed ^ 0x6d61726b);
     this.ledger = new Ledger();
@@ -213,10 +235,107 @@ export class World {
 
   rebuildMoveCost(): void {
     const n = this.grid.n;
-    for (let i = 0; i < n; i++) this.moveCost[i] = TERRAIN[this.terrain[i]].cost;
+    // closed frontier tiles cost 0 (impassable), so every passability check also excludes them
+    for (let i = 0; i < n; i++) this.moveCost[i] = this.active[i] ? TERRAIN[this.terrain[i]].cost : 0;
     for (const s of this.structs) if (s.kind === S.BRIDGE && s.broken) this.moveCost[s.tile] = 0;
     this.flow.clear();
+    // the evacuation field depends on move costs; dropping it keeps it a pure function of state (save/restore)
+    this.evacField = null;
     this.bridgeVersion++;
+  }
+
+  // ------------------------------------------------------------------ frontier (design doc §3.4)
+  chunkCount(): number { return this.frontier ? this.frontier.cw * this.frontier.ch : 0; }
+
+  chunkOf(t: number): number {
+    const cw = Math.ceil(this.map.w / CHUNK);
+    return Math.floor(this.grid.row(t) / CHUNK) * cw + Math.floor(this.grid.col(t) / CHUNK);
+  }
+
+  private markChunk(ci: number): void {
+    const cw = Math.ceil(this.map.w / CHUNK);
+    const c0 = (ci % cw) * CHUNK, r0 = Math.floor(ci / cw) * CHUNK;
+    const c1 = Math.min(this.map.w, c0 + CHUNK), r1 = Math.min(this.map.h, r0 + CHUNK);
+    for (let r = r0; r < r1; r++) for (let c = c0; c < c1; c++) this.active[r * this.map.w + c] = 1;
+  }
+
+  /** True for a chunk outside the initially open square. */
+  isFrontierChunk(ci: number): boolean { return !!this.frontier && !this.frontier.initial.includes(ci); }
+
+  /** Tile in a frontier chunk opened within the last two expansion intervals (new ground for planning). */
+  recentFrontier(t: number): boolean {
+    if (!this.frontier) return false;
+    const at = this.chunkOpenTick[this.chunkOf(t)];
+    return at >= 0 && this.tick - at < 2 * FRONTIER.interval;
+  }
+
+  /** Chunks opened by the most recent frontier event (empty before the first). */
+  lastOpenedChunks(): number[] {
+    if (!this.frontier) return [];
+    const extra = this.chunksOpen.length - this.frontier.initial.length;
+    return extra > 0 ? this.chunksOpen.slice(-Math.min(extra, Math.max(4, FRONTIER.perEvent))) : [];
+  }
+
+  chunkName(ci: number): string { return this.frontier?.names[ci] ?? `chunk ${ci}`; }
+
+  /** Population limits grow with open land (initial 16 chunks → launch target of 24 active at 64 chunks). */
+  activeCap(): number {
+    if (!this.frontier) return POP.ACTIVE_CAP;
+    const extra = Math.max(0, this.chunksOpen.length - this.frontier.initial.length);
+    return Math.min(POP.ACTIVE_MAX, POP.ACTIVE_CAP + Math.floor(extra / 4));
+  }
+
+  factionCapBase(): number {
+    if (!this.frontier) return POP.FACTION_CAP;
+    const extra = Math.max(0, this.chunksOpen.length - this.frontier.initial.length);
+    return Math.min(POP.FACTION_MAX, POP.FACTION_CAP + Math.floor(extra / 12));
+  }
+
+  factionCap(f: number): number { return this.factionCapBase() + (this.factions[f]?.capBonus ?? 0); }
+
+  /** Open one chunk: tiles become playable, its sites and crossings become structures. Idempotent. */
+  openChunk(ci: number): void {
+    if (!this.frontier || this.chunksOpen.includes(ci) || ci < 0 || ci >= this.chunkCount()) return;
+    this.markChunk(ci);
+    this.chunksOpen.push(ci);
+    this.chunkOpenTick[ci] = this.tick;
+    const sites: string[] = [], crossings: string[] = [];
+    for (const s of this.map.frontierSites[ci] ?? []) { this.addStruct(s.kind, s.tile, -1, s.name || STRUCTS[s.kind].name, true); sites.push(s.name); }
+    for (const b of this.map.frontierBridges[ci] ?? []) { this.addStruct(S.BRIDGE, b.tile, -1, b.name, true); crossings.push(b.name); }
+    this.rebuildMoveCost();
+    this.territoryDirty = true;
+    this.supplyDirty = true;
+    this.frontierVersion++;
+    const cw = this.frontier.cw;
+    const centre = this.grid.idx((ci % cw) * CHUNK + (CHUNK >> 1), Math.floor(ci / cw) * CHUNK + (CHUNK >> 1));
+    const what = [sites.length ? `new sites: ${sites.join(', ')}` : 'open ground, no sites', crossings.length ? `crossings: ${crossings.join(', ')}` : ''].filter(Boolean).join('; ');
+    this.log('frontier', `Frontier opened: ${this.chunkName(ci)} — ${what} (${this.chunksOpen.length}/${this.chunkCount()} chunks open).`, -1, [], centre);
+  }
+
+  /** Scheduled expansion: FRONTIER.perEvent chunks, one per quadrant at mirrored positions, nearest ring first. */
+  frontierStep(): void {
+    const plan = this.frontier;
+    if (!plan || this.chunksOpen.length >= this.chunkCount()) { this.nextFrontierTick = -1; return; } // budget notice is logged once
+    const groups = Math.max(1, Math.round(FRONTIER.perEvent / 4));
+    let opened = 0;
+    for (const g of plan.groups) {
+      if (opened >= groups) break;
+      if (g.every((ci) => this.chunksOpen.includes(ci))) continue;
+      for (const ci of g) this.openChunk(ci);
+      opened++;
+    }
+    if (this.chunksOpen.length >= this.chunkCount()) {
+      this.nextFrontierTick = -1;
+      this.log('frontier', `All ${this.chunkCount()} chunks are open: the ${this.map.w} x ${this.map.h} launch budget for the active world is reached. Further growth would need frontier archiving — retiring settled chunks once their units evacuate and contracts settle (design §3.4).`, -1, [], -1);
+    } else {
+      this.nextFrontierTick += FRONTIER.interval;
+    }
+    if (!opened) return;
+    // new land: commanders reconsider soon (event review, quota-limited), and eligible reserves muster onto it
+    for (const c of this.cmds) {
+      if (c.status === 'active' && this.tick - c.lastReview > CLOCK.REVIEW_QUOTA) c.nextStrategic = Math.min(c.nextStrategic, this.tick + 10 + (c.id % 30));
+    }
+    frontierMuster(this);
   }
 
   rebuildWar(): void {
@@ -234,6 +353,7 @@ export class World {
   sealedFor(cmdId: number): boolean { return this.regionActive && !this.rosterSet.has(cmdId); }
 
   setOwner(t: number, cmdId: number): void {
+    if (cmdId >= 0 && !this.active[t]) return; // closed frontier land cannot be owned
     const prevF = this.ownerF[t];
     this.owner[t] = cmdId;
     const f = cmdId >= 0 ? (this.cmdById.get(cmdId)?.faction ?? -1) : -1;
@@ -341,6 +461,7 @@ export class World {
     if (tick % CLOCK.ECON === 0) this.economy();
 
     if (this.mode === 'world') {
+      if (this.nextFrontierTick > 0 && tick >= this.nextFrontierTick) this.frontierStep();
       tickOperations(this);
       tickMarkets(this);
       clockEvents(this);
@@ -564,10 +685,10 @@ export class World {
     const head = this.bucketHead;
     head.fill(-1);
     if (this.bucketNext.length < this.squads.length) this.bucketNext = new Int32Array(this.squads.length * 2 + 16);
-    const bw = Math.ceil(this.map.w / CHUNK);
+    const bw = Math.ceil(this.map.w / BUCKET);
     for (let i = 0; i < this.squads.length; i++) {
       const s = this.squads[i];
-      const b = ((this.grid.row(s.tile) / CHUNK) | 0) * bw + ((this.grid.col(s.tile) / CHUNK) | 0);
+      const b = ((this.grid.row(s.tile) / BUCKET) | 0) * bw + ((this.grid.col(s.tile) / BUCKET) | 0);
       this.bucketNext[i] = head[b];
       head[b] = i;
     }
@@ -576,9 +697,9 @@ export class World {
   /** Visit squad indices whose tile is within `range` of tile (coarse chunk filter + exact distance). */
   forNear(tile: number, range: number, fn: (s: Squad, d: number) => void): void {
     const c = this.grid.col(tile), r = this.grid.row(tile);
-    const bw = Math.ceil(this.map.w / CHUNK), bh = Math.ceil(this.map.h / CHUNK);
-    const c0 = Math.max(0, ((c - range - 1) / CHUNK) | 0), c1 = Math.min(bw - 1, ((c + range + 1) / CHUNK) | 0);
-    const r0 = Math.max(0, ((r - range) / CHUNK) | 0), r1 = Math.min(bh - 1, ((r + range) / CHUNK) | 0);
+    const bw = Math.ceil(this.map.w / BUCKET), bh = Math.ceil(this.map.h / BUCKET);
+    const c0 = Math.max(0, ((c - range - 1) / BUCKET) | 0), c1 = Math.min(bw - 1, ((c + range + 1) / BUCKET) | 0);
+    const r0 = Math.max(0, ((r - range) / BUCKET) | 0), r1 = Math.min(bh - 1, ((r + range) / BUCKET) | 0);
     for (let br = r0; br <= r1; br++) {
       for (let bc = c0; bc <= c1; bc++) {
         for (let i = this.bucketHead[br * bw + bc]; i >= 0; i = this.bucketNext[i]) {
@@ -636,7 +757,7 @@ export class World {
     if (s.task === TASK.EVACUATE && sealed && this.regionMask[s.tile]) {
       field = this.evacField ??= this.flow.compute(this.regionExits(), 0);
     } else {
-      field = this.flow.field(s.tgt, sealed ? 1 : 0);
+      field = this.flow.field(s.tgt, sealed ? 1 : 0, s.tile); // exact at s.tile, which is all a step reads
     }
     const here = field[s.tile];
     // near the destination and crowded: hold position on the ring instead of stacking
@@ -903,13 +1024,16 @@ export class World {
   }
 
   // ------------------------------------------------------------------ capture & territory
+  // capture scratch, reused every capture tick (allocation-free at 128 x 128)
+  private capF: Int8Array; private capC: Int16Array; private capR: Uint8Array; private capX: Uint8Array;
+
   capture(): void {
     const g = this.grid;
     const n = g.n;
-    const presF = new Int8Array(n).fill(-1);
-    const presCmd = new Int16Array(n).fill(-1);
-    const presRate = new Uint8Array(n);
-    const contested = new Uint8Array(n);
+    const presF = this.capF.fill(-1);
+    const presCmd = this.capC.fill(-1);
+    const presRate = this.capR.fill(0);
+    const contested = this.capX.fill(0);
     const tiles: number[] = [];
     for (const s of this.squads) {
       const cap = UNITS[s.cls].capture;
@@ -1052,6 +1176,20 @@ export class World {
   // ------------------------------------------------------------------ economy
   economy(): void {
     const tick = this.tick;
+    // one pass over the map for every commander's territory, supplied tiles and ruins (no per-commander map loops).
+    // Sized by the largest id, not nextCmdId: duel sides carry their world ids (c.id = p.id), which can exceed it.
+    let ids = this.nextCmdId;
+    for (const c of this.cmds) if (c.id >= ids) ids = c.id + 1;
+    const terr = new Int32Array(ids), supT = new Int32Array(ids), ruinT = new Int32Array(ids);
+    for (let t = 0; t < this.grid.n; t++) {
+      const o = this.owner[t];
+      if (o < 0 || o >= ids) continue;
+      terr[o]++;
+      const of = this.ownerF[t];
+      if (of < 0 || !this.factions[of].inSupply[t]) continue;
+      supT[o]++;
+      if (this.terrain[t] === T.RUIN) ruinT[o]++;
+    }
     for (const c of this.cmds) {
       if (c.status !== 'active') continue;
       const f = c.faction;
@@ -1071,12 +1209,7 @@ export class World {
           case S.DEPOT: if (this.isBuilt(st)) inc.supply += 4; break;
         }
       }
-      let tiles = 0, ruins = 0;
-      for (let t = 0; t < this.grid.n; t++) {
-        if (this.owner[t] !== c.id || !fs.inSupply[t]) continue;
-        tiles++;
-        if (this.terrain[t] === T.RUIN && ruins < 4) ruins++;
-      }
+      const tiles = supT[c.id], ruins = Math.min(4, ruinT[c.id]);
       inc.alloy += Math.floor(tiles / 20) + ruins;
       inc.supply += Math.floor(tiles / 12);
       const im = 100 + this.mods(f).income;
@@ -1095,14 +1228,14 @@ export class World {
       c.res.supply = Math.min(2000, c.res.supply);
       c.lastIncome = inc;
       c.lastUpkeep = upkeep;
-      c.power = this.computePower(c, mine.length ? mine : [], tiles);
+      c.power = this.computePower(c, mine.length ? mine : [], tiles, terr[c.id]);
     }
     void tick;
   }
 
-  computePower(c: Commander, mine: Squad[], suppliedTiles?: number): number {
-    let territory = 0;
-    for (let t = 0; t < this.grid.n; t++) if (this.owner[t] === c.id) territory++;
+  computePower(c: Commander, mine: Squad[], suppliedTiles?: number, ownedTiles?: number): number {
+    let territory = ownedTiles ?? 0;
+    if (ownedTiles === undefined) for (let t = 0; t < this.grid.n; t++) if (this.owner[t] === c.id) territory++;
     let p = territory + (suppliedTiles ?? 0) * 0.25;
     for (const st of this.structs) {
       if (st.owner !== c.id) continue;
@@ -1162,6 +1295,7 @@ export class World {
   hashState(): void {
     let h = FNV_SEED;
     h = fnv(h, this.tick);
+    h = fnv(h, this.chunksOpen.length);
     for (const s of this.squads) { h = fnv(h, s.id); h = fnv(h, s.tile); h = fnv(h, s.hp); h = fnv(h, s.supply); }
     for (const st of this.structs) { h = fnv(h, st.id); h = fnv(h, st.hp); h = fnv(h, st.owner + 1); }
     for (const c of this.cmds) { h = fnv(h, c.res.alloy); h = fnv(h, c.res.energy); h = fnv(h, c.res.supply); }

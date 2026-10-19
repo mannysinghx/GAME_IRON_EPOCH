@@ -43,5 +43,8 @@ export function shortHash(h: string, n = 10): string { return h ? `${h.slice(0, 
 
 export const CAT_COLORS: Record<string, string> = {
   battle: '#ff6a55', territory: '#ffb547', ops: '#ffd166', market: '#7fe7ff', lineage: '#c08cff', diplomacy: '#7ee2a8',
-  team: '#5aa9ff', policy: '#9aa7ff', eval: '#b8c2d0', chapter: '#e6ebf2', build: '#8fd3c0',
+  team: '#5aa9ff', policy: '#9aa7ff', eval: '#b8c2d0', chapter: '#e6ebf2', build: '#8fd3c0', frontier: '#ff8a3d',
 };
+
+/** Frontier boundary / expansion accent: amber-orange, kept distinct from Vector's amber (#ffb547). */
+export const FRONTIER_CSS = CAT_COLORS.frontier;

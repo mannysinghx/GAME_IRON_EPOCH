@@ -34,7 +34,7 @@ export function Bottom({ ui }: { ui: UiSnapshot }) {
   );
 }
 
-const CATS = ['all', 'battle', 'territory', 'ops', 'market', 'lineage', 'diplomacy', 'team', 'policy', 'eval', 'build', 'chapter'];
+const CATS = ['all', 'battle', 'territory', 'frontier', 'ops', 'market', 'lineage', 'diplomacy', 'team', 'policy', 'eval', 'build', 'chapter'];
 
 export function Chronicle({ ui }: { ui: UiSnapshot }) {
   const f = store.chronFilter, q = store.chronSearch.toLowerCase();
@@ -49,7 +49,7 @@ export function Chronicle({ ui }: { ui: UiSnapshot }) {
       </div>
       <div class="chron-list">
         {list.length === 0 ? <Empty>No events match.</Empty> : list.map((e) => (
-          <div key={e.id} class="ev" onClick={() => { if (e.tile >= 0) camera.focusTile(e.tile, 1.4); if (e.a[0] !== undefined) store.select(e.a[0]); }}>
+          <div key={e.id} class="ev" onClick={() => { if (e.tile >= 0) camera.focusTile(e.tile); if (e.a[0] !== undefined) store.select(e.a[0]); }}>
             <span class="mono dim">{simClock(e.tick)}</span>
             <span class="ev-cat" style={{ '--cc': CAT_COLORS[e.cat] ?? '#8a93a2' }}>{e.cat}</span>
             {e.f >= 0 && <i class="dot" style={{ background: fcss(e.f) }} />}

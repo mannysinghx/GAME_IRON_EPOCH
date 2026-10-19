@@ -2,7 +2,7 @@
 // doctrine mutation, defeat into reserve, reconstruction, emergency reconstruction, citadel awakening,
 // autonomous team charters, inter-faction non-aggression treaties, and published weather.
 
-import { CLOCK, DOCTRINE, FACTIONS, MERIT, POP, S, STRUCTS, T } from '../shared/config.ts';
+import { CLOCK, DOCTRINE, FACTIONS, FRONTIER, MERIT, POP, S, STRUCTS, T } from '../shared/config.ts';
 import { hex32 } from '../shared/rng.ts';
 import type { World } from './world.ts';
 import { makeCommander, remember } from './agents.ts';
@@ -218,7 +218,39 @@ export function reliability(c: Commander): number {
 // ------------------------------------------------------------------ musters, succession, reconstruction
 function activeCount(w: World, f?: number): number { return w.cmds.filter((c) => c.status === 'active' && (f === undefined || c.faction === f)).length; }
 
-function factionCap(w: World, f: number): number { return POP.FACTION_CAP + w.factions[f].capBonus; }
+/**
+ * Extra muster after a frontier opening (§3.4): eligible commanders deploy within the larger, land-scaled caps, then
+ * a founding wave settles the new ground. Without it headcount lags the land: the ordinary muster only deploys
+ * commanders who already qualify (awaiting heirs, paid reconstructions, 200-merit veterans), and at an opening
+ * nobody usually does.
+ */
+export function frontierMuster(w: World): void {
+  muster(w, 'frontier muster', POP.MUSTER_MAX, 10);
+  frontierFounding(w);
+}
+
+/**
+ * One gen-1 commander per faction, all four factions or none so expansion stays balanced. Sites are chosen before
+ * anyone deploys (rotated faction order) and must lie far enough apart that one deployment cannot spoil another's.
+ */
+function frontierFounding(w: World): void {
+  if (activeCount(w) + 4 > w.activeCap()) return;
+  for (let f = 0; f < 4; f++) if (activeCount(w, f) >= w.factionCap(f)) return;
+  const ev = Math.floor(w.frontierVersion / FRONTIER.perEvent);
+  const order = [0, 1, 2, 3].map((k) => (ev + k) % 4);
+  const tiles = order.map((f) => findCoreSite(w, f));
+  if (tiles.some((t) => t < 0)) return;
+  for (let i = 0; i < 4; i++) for (let j = i + 1; j < 4; j++) if (w.grid.dist(tiles[i], tiles[j]) < 16) return;
+  order.forEach((f, i) => {
+    const doctrine = FACTIONS[f].doctrine.map((v) => clamp(v + w.rng.range(-8, 8), 0, 100));
+    const c = makeCommander(w, { faction: f, doctrine, gen: 1, parents: [], birthKind: 'frontier founding' });
+    w.deployCommander(c, tiles[i], 'reconstruction');
+    c.campaignBase = { sites: 0, territory: territoryOf(w, c.id) };
+    const ci = w.chunkOf(tiles[i]);
+    const where = w.isFrontierChunk(ci) ? `frontier chunk ${w.chunkName(ci)}` : 'home territory';
+    w.log('lineage', `${c.name} (${FACTIONS[f].name}, gen 1) deployed — frontier muster: founding on ${where}. Doctrine A${c.doctrine[0]} C${c.doctrine[1]} L${c.doctrine[2]} E${c.doctrine[3]} Y${c.doctrine[4]} D${c.doctrine[5]}. Standard starter budget only.`, f, [c.id], tiles[i]);
+  });
+}
 
 function muster(w: World, occasion: string, maxNew: number, mutRange: number): void {
   let spawned = 0;
@@ -226,7 +258,7 @@ function muster(w: World, occasion: string, maxNew: number, mutRange: number): v
   // rotate faction order so no faction always musters first
   for (let k = 0; k < 4 && spawned < maxNew; k++) {
     const f = (ci + k) % 4;
-    if (activeCount(w) >= POP.ACTIVE_CAP || activeCount(w, f) >= factionCap(w, f)) continue;
+    if (activeCount(w) >= w.activeCap() || activeCount(w, f) >= w.factionCap(f)) continue;
     // 1. awaiting descendants deploy first, 2. reconstruct reserve commanders, 3. veteran succession
     const awaiting = w.cmds.find((c) => c.faction === f && c.status === 'reserve' && c.awaiting);
     if (awaiting) { if (deployFromReserve(w, awaiting, `${occasion}: descendant deployment`)) spawned++; continue; }
@@ -303,32 +335,59 @@ function deployFromReserve(w: World, c: Commander, why: string): boolean {
   return true;
 }
 
-function findCoreSite(w: World, f: number): number {
+/** Hex distance (capped) from every tile to the nearest tile matching `src`: multi-source BFS, O(n). */
+function distField(w: World, src: (t: number) => boolean, cap: number): Uint8Array {
+  const g = w.grid, n = g.n;
+  const d = new Uint8Array(n).fill(cap);
+  const q = new Int32Array(n);
+  let qh = 0, qt = 0;
+  for (let t = 0; t < n; t++) if (src(t)) { d[t] = 0; q[qt++] = t; }
+  while (qh < qt) {
+    const u = q[qh++];
+    const du = d[u] + 1;
+    if (du >= cap) continue;
+    for (let k = 0; k < 6; k++) { const v = g.nb[u * 6 + k]; if (v >= 0 && d[v] > du) { d[v] = du; q[qt++] = v; } }
+  }
+  return d;
+}
+
+/**
+ * Deployment site for a new or returning commander: supplied home territory, or open unowned land within 6 of the
+ * faction's territory and at least 8 from any enemy (newly opened frontier preferred, so new commanders settle it).
+ * Falls back to the bounded reserve entry. Closed frontier tiles are never used.
+ */
+export function findCoreSite(w: World, f: number): number {
   const g = w.grid;
   const fs = w.factions[f];
   let best = -1, bestScore = -1e9;
-  const enemyTiles: number[] = [];
-  for (let t = 0; t < g.n; t += 1) { const of = w.ownerF[t]; if (of >= 0 && of !== f && (t % 3 === 0)) enemyTiles.push(t); }
+  const dEnemy = distField(w, (t) => { const of = w.ownerF[t]; return of >= 0 && of !== f; }, 30);
+  const dOwn = distField(w, (t) => w.ownerF[t] === f, 8);
   const cores = w.structs.filter((s) => s.kind === S.CORE);
+  const occupied = new Uint8Array(g.n);
+  for (const st of w.structs) occupied[st.tile] = 1;
+  const newest = new Set(w.lastOpenedChunks());
   for (let t = 0; t < g.n; t++) {
-    if (w.ownerF[t] !== f || !fs.inSupply[t]) continue;
+    if (!w.active[t] || occupied[t]) continue;
+    const of = w.ownerF[t];
+    const home = of === f && fs.inSupply[t] === 1;
+    const settle = of === -1 && dOwn[t] <= 6 && dEnemy[t] >= 8;
+    if (!home && !settle) continue;
     const tt = w.terrain[t];
     if (tt !== T.PLAINS && tt !== T.ROAD && tt !== T.RUIN) continue;
-    if (w.structAt(t)) continue;
+    if (dEnemy[t] < 6) continue;
     let near = false;
     for (const st of cores) if (g.dist(st.tile, t) < 7) { near = true; break; }
     if (near) continue;
-    let dEnemy = 30;
-    for (const e of enemyTiles) { const d = g.dist(e, t); if (d < dEnemy) dEnemy = d; }
-    if (dEnemy < 6) continue;
-    const score = dEnemy * 2 - g.dist(t, fs.reserveEntry) * 0.15;
+    let score = dEnemy[t] * 2 - g.dist(t, fs.reserveEntry) * 0.15;
+    // frontier land outranks any home tile (max 60 from distance), the newest chunks most
+    if (settle) { const ci = w.chunkOf(t); if (w.isFrontierChunk(ci)) score += newest.has(ci) ? 60 : 45; }
     if (score > bestScore) { bestScore = score; best = t; }
   }
   if (best >= 0) return best;
   // bounded reserve entry outside immediate enemy firing range
   const entry = fs.reserveEntry;
   for (const t of g.within(entry, 4)) {
-    if (w.moveCost[t] === 0 || w.structAt(t)) continue;
+    if (!w.active[t] || w.moveCost[t] === 0 || w.structAt(t)) continue;
     let hostile = false;
     for (const s of w.squads) if (s.faction !== f && g.dist(s.tile, t) <= 6) { hostile = true; break; }
     if (!hostile) return t;
@@ -381,7 +440,7 @@ export function emergencyCheck(w: World): void {
     if (activeCount(w, f) > 0) continue;
     // wait until operations that involve this faction finish
     if (w.ops.some((o) => (o.status === 'Locked' || o.status === 'Running') && o.roster.some((id) => w.cmdById.get(id)?.faction === f))) continue;
-    if (activeCount(w) >= POP.ACTIVE_CAP) continue;
+    if (activeCount(w) >= w.activeCap()) continue;
     let c = w.cmds.filter((x) => x.faction === f && x.status === 'reserve').sort((a, b) => a.reserveSince - b.reserveSince)[0];
     if (!c) c = makeCommander(w, { faction: f, doctrine: FACTIONS[f].doctrine.slice(), gen: 1, parents: [], birthKind: 'emergency reconstruction' });
     const tile = findCoreSite(w, f);
@@ -397,7 +456,8 @@ const STORM_NAMES = ['Ion squall', 'Dust front', 'Static veil', 'Ash storm', 'Ma
 
 function scheduleWeather(w: World, from: number): void {
   w.weather = w.weather.filter((s) => s.end > w.tick);
-  const sites = w.structs.filter((s) => STRUCTS[s.kind].capturable && s.kind !== S.CITADEL);
+  const sites = w.structs.filter((s) => STRUCTS[s.kind].capturable && s.kind !== S.CITADEL && w.active[s.tile]);
+  if (!sites.length) return;
   for (let i = 0; i < 2; i++) {
     const site = sites[w.rng.int(sites.length)];
     const start = from + 600 + w.rng.int(Math.floor(CLOCK.CAMPAIGN * 0.6));

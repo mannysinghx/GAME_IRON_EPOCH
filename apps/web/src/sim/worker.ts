@@ -6,7 +6,7 @@ import { CLOCK, TICK_HZ } from '../shared/config.ts';
 import { hashStr } from '../shared/rng.ts';
 import type { ClientCmd, EvalResult, PerfView, PolicySnapshot, WorkerMsg } from '../shared/protocol.ts';
 import { World } from './world.ts';
-import { buildDossier, buildFrame, buildStatic, buildUi, newViewState, type ViewState } from './view.ts';
+import { buildDossier, buildFrame, buildFrontier, buildStatic, buildUi, newViewState, type ViewState } from './view.ts';
 import { claimGrant, placeBet } from './market.ts';
 import { clearSnapshot, deserialize, loadSnapshot, saveSnapshot, serialize } from './persist.ts';
 import { policyLabel } from './agents.ts';
@@ -23,6 +23,7 @@ let lastFrame = 0, lastUi = 0, lastDossier = 0, lastSave = performance.now(), la
 let evalPending = -1;
 let lastSaveTick = 0, saveBytes = 0, frameBytes = 0;
 let lagging = false;
+let frontierSent = -1; // frontierVersion of the last FrontierMsg posted
 const tickTimes = new Float64Array(600);
 let tickIdx = 0, tickCount = 0;
 const tpsWindow: number[] = [];
@@ -45,6 +46,7 @@ async function start(resume: boolean, seed?: number): Promise<void> {
   vs.selected = world.cmds.find((c) => c.status === 'active')?.id ?? -1;
   lastSaveTick = world.tick;
   post({ type: 'static', map: buildStatic(world) });
+  sendFrontier(true);
   post({ type: 'ready', resumed });
   sendFrame();
   sendUi();
@@ -62,6 +64,14 @@ function perfView(): PerfView {
     visMs: 0, agentMs: 0, flowFields: 0, flowHits: 0, flowMisses: 0, frameBytes, entities: 0, memoryFacts: 0, decisions: 0,
     lastSaveTick, saveBytes, stateHash: '', hashHist: [],
   };
+}
+
+/** Active mask + site list; posted after the static map and whenever chunks open, before the frame that shows them. */
+function sendFrontier(initial = false): void {
+  if (!world) return;
+  const msg = buildFrontier(world, initial);
+  frontierSent = world.frontierVersion;
+  post(msg, [msg.active.buffer as ArrayBuffer]);
 }
 
 function sendFrame(): void {
@@ -157,6 +167,7 @@ function loop(): void {
     }
   }
   if (world) {
+    if (world.frontierVersion !== frontierSent) sendFrontier();
     if (now - lastFrame >= 50) { lastFrame = now; sendFrame(); }
     if (now - lastUi >= 250) { lastUi = now; sendUi(); }
     if (now - lastDossier >= 500) { lastDossier = now; sendDossier(); }

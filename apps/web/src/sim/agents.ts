@@ -150,9 +150,9 @@ function candidates(w: World, c: Commander, obs: Obs): Candidate[] {
   const sealed = w.sealedFor(c.id);
   const out: { kind: number; tile: number; struct: number; name: string; quick: number }[] = [];
   const add = (kind: number, tile: number, struct: number, name: string, value: number) => {
-    if (tile < 0) return;
+    if (tile < 0 || !w.active[tile]) return; // closed frontier land is never a target
     if (sealed && w.regionMask[tile]) return;
-    const d = g.dist(obs.centroid, tile);
+    const d = reach(w, c, obs, kind, tile);
     out.push({ kind, tile, struct, name, quick: value * (1 - Math.min(1, d / 70)) });
   };
   const known = (tile: number) => (fs.visible[tile] || w.ownerF[tile] === f ? w.ownerF[tile] : fs.knownOwner[tile]);
@@ -206,7 +206,7 @@ function candidates(w: World, c: Commander, obs: Obs): Candidate[] {
     for (let r = 4; r < w.map.h; r += 8) {
       for (let col = 4; col < w.map.w; col += 8) {
         const t = g.idx(col, r);
-        if (g.dist(t, c.homeTile) > 34 || w.moveCost[t] === 0) continue;
+        if (!w.active[t] || g.dist(t, c.homeTile) > 34 || w.moveCost[t] === 0) continue;
         const ls = fs.lastSeen[t];
         const age = ls < 0 ? 100000 : w.tick - ls;
         if (age > bestAge || (age === bestAge && t < bestTile)) { bestAge = age; bestTile = t; }
@@ -232,9 +232,24 @@ function candidates(w: World, c: Commander, obs: Obs): Candidate[] {
     dedup.push(o);
     if (dedup.length >= 7) break;
   }
+  // One slot is reserved for the frontier (§3.4): frontier sites lie 15-25 hexes out, so front-line work nearer the
+  // army always fills the cut and the new land would never even be considered. Utility still decides.
+  if (w.frontier && !dedup.some((d) => w.isFrontierChunk(w.chunkOf(d.tile)))) {
+    const fr = out.find((o) => o.kind === PK.CAPTURE && w.isFrontierChunk(w.chunkOf(o.tile)));
+    if (fr) dedup.push(fr);
+  }
   const home = obs.core?.tile ?? c.homeTile;
   dedup.push({ kind: PK.REGROUP, tile: home, struct: -1, name: 'regroup at command core', quick: 0 });
   return dedup.map((o) => ({ kind: o.kind, tile: o.tile, struct: o.struct, name: o.name, feats: [], U: 0, L: 0, score: 0 }));
+}
+
+/**
+ * Planning distance to a target. Neutral captures are measured from the nearer of the army and the home core:
+ * frontier chunks open beside each faction's home, far from the front where the army's centroid sits.
+ */
+function reach(w: World, c: Commander, obs: Obs, kind: number, tile: number): number {
+  const d = w.grid.dist(obs.centroid, tile);
+  return kind === PK.CAPTURE && c.homeTile >= 0 ? Math.min(d, w.grid.dist(c.homeTile, tile)) : d;
 }
 
 function nearKind(w: World, tile: number, kind: number, r: number, f: number): boolean {
@@ -263,12 +278,15 @@ function features(w: World, c: Commander, obs: Obs, cd: Candidate): number[] {
   }
   if (cd.kind === PK.DEFEND && st?.kind === S.CORE) value = 1;
   f[0] = value;
-  f[1] = 1 - Math.min(1, g.dist(obs.centroid, cd.tile) / 40);
+  f[1] = 1 - Math.min(1, reach(w, c, obs, cd.kind, cd.tile) / 40);
   const th = threatAt(w, obs.enemies, cd.tile, 4) + structThreat(w, c, cd.tile);
   f[2] = th / (th + Math.max(0.5, obs.strength));
   f[3] = Math.min(1, fs.supplyDist[cd.tile] / 12);
   const ls = fs.lastSeen[cd.tile];
   f[4] = ls < 0 ? 1 : Math.min(1, (w.tick - ls) / 900);
+  // New ground: an opening publicly announces its sites as neutral, and settling it means reaching past the supply
+  // network by design, so recently opened frontier captures carry half the supply-risk and uncertainty penalties.
+  if (cd.kind === PK.CAPTURE && w.recentFrontier(cd.tile)) { f[3] *= 0.5; f[4] *= 0.5; }
   let danger = 0;
   for (const m of c.memory) {
     if (m.kind !== 'DANGER' && m.kind !== 'LESSON') continue;
@@ -546,7 +564,7 @@ function order(w: World, c: Commander, s: Squad, task: number, tile: number, str
   if (s.task === task && s.tgt === tile && s.tgtStruct === struct && (buildKind < 0 || s.buildKind === buildKind)) return true;
   c.rel.issued++;
   // validator: ownership, bounds, passability or adjacency, sealed operation regions
-  if (s.owner !== c.id || tile < 0 || tile >= w.grid.n) { c.rel.rejected++; return false; }
+  if (s.owner !== c.id || tile < 0 || tile >= w.grid.n || !w.active[tile]) { c.rel.rejected++; return false; }
   if (w.moveCost[tile] === 0) {
     let adj = false;
     for (let k = 0; k < 6; k++) { const v = w.grid.nb[tile * 6 + k]; if (v >= 0 && w.moveCost[v] > 0) adj = true; }
@@ -576,7 +594,7 @@ function buildOrder(w: World, c: Commander, s: Squad, kind: number, tile: number
   if (!canAfford(w, c, kind)) return false; // planner checks its own budget before requesting
   const { alloy, energy } = buildCost(w, c, kind);
   c.rel.issued++;
-  if (w.ownerF[tile] !== c.faction || w.moveCost[tile] === 0 || w.terrain[tile] === T.CROSSING || w.structAt(tile) || c.res.alloy < alloy || c.res.energy < energy) {
+  if (!w.active[tile] || w.ownerF[tile] !== c.faction || w.moveCost[tile] === 0 || w.terrain[tile] === T.CROSSING || w.structAt(tile) || c.res.alloy < alloy || c.res.energy < energy) {
     c.rel.rejected++;
     return false;
   }
@@ -645,7 +663,8 @@ export function runOperational(w: World, c: Commander): void {
   const sortedToCore = avail.slice().sort(byDist(coreTile));
   const reserve = new Set(sortedToCore.slice(0, reserveN).map((s) => s.id));
   const group: number[] = [];
-  const structTask = ORDER_TASKS_STRUCT.has(p.kind);
+  // a destroyed target leaves the plan until the next review; hold its ground instead of ordering a dead struct
+  const structTask = ORDER_TASKS_STRUCT.has(p.kind) && p.struct >= 0 && w.structById.has(p.struct);
   const holdTile = p.kind === PK.RECON ? frontierTile(w, c, coreTile, targetTile) : targetTile;
   for (const s of avail) {
     if (reserve.has(s.id)) {
@@ -657,7 +676,8 @@ export function runOperational(w: World, c: Commander): void {
     group.push(s.id);
     if (p.kind === PK.REGROUP) order(w, c, s, TASK.MOVE, coreTile);
     else if (structTask && p.struct >= 0 && !(sealed && w.regionMask[p.tile])) order(w, c, s, TASK.ATTACK_STRUCT, legal(approachTile(w, targetTile, s.tile)), p.struct);
-    else order(w, c, s, TASK.ATTACK_MOVE, legal(holdTile));
+    // an impassable objective (a destroyed bridge named as an operation objective) is held from its bank
+    else order(w, c, s, TASK.ATTACK_MOVE, legal(approachTile(w, holdTile, s.tile)));
   }
   // artillery trails the assault group, inside range of the objective
   for (const s of arty) {
@@ -716,7 +736,7 @@ export function runOperational(w: World, c: Commander): void {
 function exitTile(w: World, from: number): number {
   let best = from, bd = 999;
   for (const t of w.grid.within(from, 9)) {
-    if (w.regionMask[t] || w.moveCost[t] === 0) continue;
+    if (!w.active[t] || w.regionMask[t] || w.moveCost[t] === 0) continue;
     const d = w.grid.dist(t, from);
     if (d < bd || (d === bd && t < best)) { bd = d; best = t; }
   }
@@ -726,7 +746,7 @@ function exitTile(w: World, from: number): number {
 /** Walk from a sealed tile back toward `toward` until leaving the region. */
 function outsideRegion(w: World, tile: number, toward: number): number {
   const line = w.grid.line(tile, toward);
-  for (const t of line) if (!w.regionMask[t] && w.moveCost[t] > 0) return t;
+  for (const t of line) if (w.active[t] && !w.regionMask[t] && w.moveCost[t] > 0) return t;
   return toward;
 }
 
@@ -735,7 +755,7 @@ function approachTile(w: World, target: number, from: number): number {
   let best = target, bd = 999;
   for (let k = 0; k < 6; k++) {
     const v = w.grid.nb[target * 6 + k];
-    if (v < 0 || w.moveCost[v] === 0) continue;
+    if (v < 0 || !w.active[v] || w.moveCost[v] === 0) continue;
     const d = w.grid.dist(v, from);
     if (d < bd) { bd = d; best = v; }
   }
@@ -746,13 +766,13 @@ function reservePost(w: World, c: Commander, core: number, target: number): numb
   // between the core and the objective, a third of the way out
   const line = w.grid.line(core, target);
   const t = line[Math.min(line.length - 1, Math.max(2, Math.floor(line.length / 3)))] ?? core;
-  if (w.moveCost[t] > 0 && !(w.sealedFor(c.id) && w.regionMask[t])) return t;
+  if (w.active[t] && w.moveCost[t] > 0 && !(w.sealedFor(c.id) && w.regionMask[t])) return t;
   return core;
 }
 
 function frontierTile(w: World, c: Commander, core: number, target: number): number {
   const line = w.grid.line(core, target);
-  for (let i = line.length - 1; i >= 0; i--) if (w.ownerF[line[i]] === c.faction && w.moveCost[line[i]] > 0) return line[i];
+  for (let i = line.length - 1; i >= 0; i--) if (w.active[line[i]] && w.ownerF[line[i]] === c.faction && w.moveCost[line[i]] > 0) return line[i];
   return core;
 }
 
@@ -762,7 +782,7 @@ function staleTile(w: World, c: Commander, center: number, radius: number, salt:
   const tiles = w.grid.within(center, radius);
   for (let i = 0; i < tiles.length; i++) {
     const t = tiles[(i + salt * 7) % tiles.length];
-    if (w.moveCost[t] === 0 || (w.sealedFor(c.id) && w.regionMask[t])) continue;
+    if (!w.active[t] || w.moveCost[t] === 0 || (w.sealedFor(c.id) && w.regionMask[t])) continue;
     const ls = fs.lastSeen[t];
     const age = ls < 0 ? 1e6 : w.tick - ls;
     if (age > bestAge) { bestAge = age; best = t; }
@@ -775,7 +795,7 @@ function depotSite(w: World, c: Commander, target: number): number {
   const sealed = w.sealedFor(c.id);
   let best = -1, bd = 999;
   for (let t = 0; t < w.grid.n; t++) {
-    if (w.ownerF[t] !== c.faction || !fs.inSupply[t] || w.moveCost[t] === 0 || w.terrain[t] === T.CROSSING) continue;
+    if (w.ownerF[t] !== c.faction || !w.active[t] || !fs.inSupply[t] || w.moveCost[t] === 0 || w.terrain[t] === T.CROSSING) continue;
     if (sealed && w.regionMask[t]) continue;
     const d = w.grid.dist(t, target);
     if (d >= bd) continue;
@@ -794,7 +814,7 @@ function bunkerSite(w: World, c: Commander, target: number): number {
   const sealed = w.sealedFor(c.id);
   for (const t of w.grid.within(target, 2)) {
     if (sealed && w.regionMask[t]) continue;
-    if (w.ownerF[t] === c.faction && w.moveCost[t] > 0 && w.terrain[t] !== T.CROSSING && !w.structAt(t)) return t;
+    if (w.active[t] && w.ownerF[t] === c.faction && w.moveCost[t] > 0 && w.terrain[t] !== T.CROSSING && !w.structAt(t)) return t;
   }
   return -1;
 }
