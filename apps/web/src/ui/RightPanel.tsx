@@ -353,7 +353,7 @@ export function DossierPanel({ ui, d }: { ui: UiSnapshot; d: Dossier | null }) {
           {d.policyHistory.map((p, i) => <div class="row" key={i}><span class="mono">{p.version}</span><span class="grow dim">{p.note}</span><span class="mono dim">{simClock(p.tick)}</span></div>)}
         </details>
       )}
-      <div class="foot-note">Strategic layer: doctrine utility baseline plus a per-agent online linear value learner (no language model, no remote inference). Explanations are generated from accepted plan IDs and observation features, not from private reasoning.</div>
+      <div class="foot-note">Strategic layer: doctrine utility baseline plus an online linear value head trained on plan advantage and shared across the faction (no language model, no remote inference). Explanations are generated from accepted plan IDs and observation features, not from private reasoning.</div>
     </Section>
   );
 }

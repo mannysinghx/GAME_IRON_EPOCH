@@ -1012,7 +1012,10 @@ export class World {
         if (st.kind === S.DEPOT) this.log('battle', `${this.cmdName(killerId)} destroyed a supply depot of ${this.cmdName(st.owner)} ${this.siteName(st.tile)}.`, this.cmdById.get(killerId)?.faction ?? -1, [killerId, st.owner], st.tile);
       }
       const killer = this.cmdById.get(killerId);
-      if (killer) killer.stats.valueKilled += 100;
+      if (killer) {
+        killer.stats.valueKilled += 100;
+        if (st.kind !== S.CORE) killer.res.alloy = Math.min(2000, killer.res.alloy + 30); // salvage from a destroyed enemy building
+      }
     }
     const before = this.structs.length;
     this.structs = this.structs.filter((st) => !(STRUCTS[st.kind].destructible && st.kind !== S.BRIDGE && st.hp <= 0));
@@ -1082,6 +1085,9 @@ export class World {
           if (prevF >= 0 && prevF !== capturer.faction) {
             const fs = this.factions[prevF];
             fs.hostility[capturer.faction] = Math.min(100, fs.hostility[capturer.faction] + 8);
+            // plunder: taking an enemy-held site seizes its stockpile, so a successful offensive pays immediately
+            capturer.res.alloy = Math.min(2000, capturer.res.alloy + 40);
+            capturer.res.energy = Math.min(2000, capturer.res.energy + 20);
           }
           if (st.kind === S.CITADEL) this.onCitadel(capturer);
           for (const tm of this.teams) if (tm.members.some((m) => m.id === capturer.id)) tm.record.captures++;
@@ -1201,11 +1207,12 @@ export class World {
         if (st.owner !== c.id) continue;
         const sup = fs.inSupply[st.tile] === 1;
         switch (st.kind) {
-          case S.MINE: if (sup) inc.alloy += 4; break;
-          case S.REFINERY: if (sup) inc.energy += 4; break;
-          case S.RELAY: if (sup) { inc.energy += 2; inc.alloy += 1; inc.supply += 1; } break;
-          case S.HUB: if (sup) { inc.alloy += 2; inc.energy += 1; inc.supply += 3; } break;
-          case S.CITADEL: if (sup) { inc.alloy += 6; inc.energy += 6; inc.supply += 5; } break;
+          // occupied but unsupplied sites yield half (design §3.5: empty ownership cannot collect FULL income)
+          case S.MINE: inc.alloy += sup ? 4 : 2; break;
+          case S.REFINERY: inc.energy += sup ? 4 : 2; break;
+          case S.RELAY: if (sup) { inc.energy += 2; inc.alloy += 1; inc.supply += 1; } else inc.energy += 1; break;
+          case S.HUB: if (sup) { inc.alloy += 2; inc.energy += 1; inc.supply += 3; } else { inc.alloy += 1; inc.supply += 1; } break;
+          case S.CITADEL: if (sup) { inc.alloy += 6; inc.energy += 6; inc.supply += 5; } else { inc.alloy += 3; inc.energy += 3; inc.supply += 2; } break;
           case S.DEPOT: if (this.isBuilt(st)) inc.supply += 4; break;
         }
       }

@@ -206,7 +206,7 @@ function Stakes({ ui }: { ui: UiSnapshot | null }) {
 
       <Sub icon="dna" title="The world remembers">
         <div class="sg-grid4">
-          <div class="sg-mini"><Icon name="brain" size={14} /><b>Learning</b><p>Each commander learns from its own plan outcomes; a value correction shifts how it scores the next plans.</p></div>
+          <div class="sg-mini"><Icon name="brain" size={14} /><b>Learning</b><p>Each commander learns from its own and its faction's plan outcomes; the learned correction measurably improves the sites and territory it holds.</p></div>
           <div class="sg-mini"><Icon name="eye" size={14} /><b>Memory</b><p>It remembers where it was hurt and which routes failed, and steers around them later.</p></div>
           <div class="sg-mini"><Icon name="dna" size={14} /><b>Lineage</b><p>Veterans ({POP.SPONSOR_PLANS} plans chosen, {POP.SPONSOR_MERIT} merit, at most one descendant per campaign) sponsor descendants with slightly mutated doctrine. Defeated commanders go to reserve.</p></div>
           <div class="sg-mini"><Icon name="shield" size={14} /><b>Pacts</b><p>Factions sign non-aggression pacts against a dominant power at campaign windows, and must give notice to break them.</p></div>
@@ -296,13 +296,19 @@ function Minds() {
         </Sub>
       </div>
 
-      <Sub icon="arrow" title="A typical arc">
+      <Sub icon="arrow" title="A typical arc (measured over 3 simulated campaigns)">
         <div class="sg-arc">
-          <span><b>1</b>Expand near home</span>
-          <span><b>2</b>Push supply lines outward</span>
-          <span><b>3</b>Contest hubs and the citadel</span>
-          <span><b>4</b>Drop everything for operation objectives</span>
+          <span><b>1</b>Grab neutral land first: captures lead the opening minutes</span>
+          <span><b>2</b>Push into weakly held enemy sites: attacks and raids are about a third of all plans</span>
+          <span><b>3</b>Defend only under real pressure: about 3 plans in 10, down from more than half</span>
+          <span><b>4</b>Drop everything for operation objectives: about a fifth</span>
         </div>
+        <p class="sg-small">Taking an enemy-held site seizes its stockpile, and occupied sites pay half even before supply reaches them, so a well-chosen offensive pays. Badly chosen ones still bleed squads.</p>
+      </Sub>
+
+      <Sub icon="brain" title="Learning that counts">
+        <p class="sg-small">After every plan a commander scores how much better or worse it went than its own average: sites, territory, value traded, operation points and its own world power. That advantage trains its value head (L), which learns which kinds of plan pay in which situations. Every commander in a faction also learns from its comrades' plans.</p>
+        <p class="sg-small">Measured in paired forks of the same world on 12 maps: copies that kept their learned weights held <b>+0.42 sites</b>, <b>+11 hexes</b> and <b>+30 world power</b> more 13 simulated minutes later than identical copies with the weights wiped, with 95% intervals that exclude zero. The earlier learner showed no measurable effect on the same maps. Learning changes roughly 1 decision in 4.</p>
       </Sub>
     </Sec>
   );

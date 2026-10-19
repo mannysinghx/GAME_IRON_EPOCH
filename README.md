@@ -47,11 +47,17 @@ Decision hierarchy per the doc (§5.2): tactical rules every 200 ms tick → ope
 3 s → strategic review every 60–120 s or after major events (quota-limited).
 
 - **Strategic layer** = doctrine utility baseline (aggression, caution, logistics, expansion, loyalty,
-  deception) **plus a per-agent online linear value head**. Each review scores 4–8 legal candidate plans from
-  fog-filtered features; when a plan closes, its realized reward (sites, territory, value traded, operation
-  score, goal achieved) updates the weights. Every 8 updates produces a new policy version. Exploration is
-  ε-greedy with a decaying ε. There is **no language model** and no remote inference; the generative
-  SmolLM2/wllama layer from §5.4–5.6 is not implemented.
+  deception) **plus an online linear value head**. Each review scores 4–8 legal candidate plans from
+  fog-filtered features. When a plan closes, its *advantage* (reward minus the commander's own running mean;
+  reward counts sites, territory, value traded, operation points and the commander's own world power, per
+  90 s of plan time) updates the head; every commander in the faction replays the update at a fraction of the
+  rate. Every 8 updates produces a new policy version; exploration is ε-greedy with a decaying ε. There is
+  **no language model** and no remote inference (the SmolLM2/wllama layer of §5.4–5.6 is not implemented).
+- **Measured behaviour** (headless, 3 seeds × one campaign): DEFEND fell from 53% of decisions to about 29%,
+  offensive plans (attack, raid, core assault, sabotage) rose from about 11% to 36%, and enemy-held sites changed
+  hands about 3× as often. Learning effect, in paired forks of the same world with one commander's learned weights
+  wiped (12 maps, 141 pairs, seed-level 95% intervals): +0.42 sites [0.22, 0.62], +11 hexes [5.1, 16.9],
+  +30 world power [7.0, 53.7] 4,000 ticks later; the previous learner measured −5 power [−22, 12] on the same maps.
 - **Memory**: bounded facts (route failures, plan outcomes, opponent tendencies, inherited lessons) with
   provenance, age and decaying confidence.
 - **Lineage**: veterans with 200 merit and 20 completed plans sponsor descendants (integer doctrine mean, at

@@ -25,7 +25,7 @@ export function makeCommander(
     gen: spec.gen, parents: spec.parents.slice(), children: [], born: w.tick, birthKind: spec.birthKind,
     doctrine: spec.doctrine.map((v) => clamp(Math.round(v), 0, 100)), mutation: [],
     policyMajor: 1, policyMinor: 0, policyHash: '', policyHistory: [],
-    lw: new Array(PSI_DIM).fill(0), updates: 0, errEma: 0.5, rewardEma: 0,
+    lw: new Array(PSI_DIM).fill(0), updates: 0, errEma: 0.5, rewardEma: 0.3, // baseline starts near the typical plan reward
     memory: [], res: { alloy: 0, energy: 0, supply: 0 }, coreId: -1, homeTile: -1, queue: [], plan: null,
     nextStrategic: 0, nextOperational: 0, lastReview: -9999,
     stats: { kills: 0, losses: 0, captures: 0, opsPlayed: 0, opsWon: 0, plans: 0, valueKilled: 0, valueLost: 0, built: 0, spent: 0, produced: 0 },
@@ -139,9 +139,21 @@ function structThreat(w: World, c: Commander, tile: number): number {
   return t;
 }
 
+/** Own and same-faction strength already standing within `r` of a tile (a garrison absorbs threat). */
+function garrisonAt(w: World, c: Commander, tile: number, r: number): number {
+  let g = 0;
+  w.forNear(tile, r, (s) => { if (s.faction === c.faction && s.cls !== U.ENGINEER) g += UNITS[s.cls].power * (s.hp / s.maxHp); });
+  return g;
+}
+
+/** Enemy pressure on an owned site that its current garrison does not already answer. */
+function unanswered(w: World, c: Commander, obs: Obs, tile: number): number {
+  return Math.max(0, threatAt(w, obs.enemies, tile, 6) - 0.7 * garrisonAt(w, c, tile, 3));
+}
+
 // ------------------------------------------------------------------ candidates
 const ATTACK_KINDS = new Set<number>([PK.ATTACK, PK.ASSAULT_CORE, PK.RAID, PK.SABOTAGE, PK.CAPTURE, PK.OPERATION]);
-const BASE_U = [0.2, 0.1, -0.15, 0.0, 0.05, -0.05, 0.0, -0.05, -0.1, -0.1, 0.2, 0.05, -0.35];
+const BASE_U = [0.2, 0.2, -0.1, 0.05, 0.05, -0.05, 0.0, -0.05, -0.1, -0.1, 0.2, 0.05, -0.35];
 
 function candidates(w: World, c: Commander, obs: Obs): Candidate[] {
   const g = w.grid;
@@ -162,8 +174,10 @@ function candidates(w: World, c: Commander, obs: Obs): Candidate[] {
     if (!sd.capturable) continue;
     const kf = known(st.tile);
     if (kf === f) {
+      // defend only against pressure the site's garrison does not already answer; a quiet or held site needs no plan
       const th = threatAt(w, obs.enemies, st.tile, 6);
-      if (th > 0.8) add(PK.DEFEND, st.tile, st.id, st.name, sd.value + 0.2);
+      const open = unanswered(w, c, obs, st.tile);
+      if (th > 0.8 && open > 0.6) add(PK.DEFEND, st.tile, st.id, st.name, sd.value + 0.2);
       else if (th > 0.2 && obs.engineers.length && !nearKind(w, st.tile, S.BUNKER, 2, f)) add(PK.FORTIFY, st.tile, st.id, st.name, sd.value * 0.6);
     } else if (kf < 0) add(PK.CAPTURE, st.tile, st.id, st.name, sd.value);
     else if (w.atWar(f, kf)) add(PK.ATTACK, st.tile, st.id, st.name, sd.value * 0.9);
@@ -295,7 +309,8 @@ function features(w: World, c: Commander, obs: Obs, cd: Candidate): number[] {
   }
   f[5] = Math.min(1, danger);
   if (cd.kind === PK.DEFEND || cd.kind === PK.FORTIFY) {
-    const ex = threatAt(w, obs.enemies, cd.tile, 6);
+    // a core's exposure is its raw threat (losing it ends the commander); a site's is the pressure its garrison leaves
+    const ex = st?.kind === S.CORE ? threatAt(w, obs.enemies, cd.tile, 6) : unanswered(w, c, obs, cd.tile);
     f[6] = ex / (ex + 2);
   }
   f[7] = cd.kind === PK.OPERATION ? 1 : 0;
@@ -316,16 +331,18 @@ function doctrineUtility(c: Commander, kind: number, f: number[], obs: Obs): num
   u += f[0] * (0.9 + (kind === PK.CAPTURE || kind === PK.ATTACK ? ex * 0.4 : 0));
   u += f[1] * 1.05;
   if (ATTACK_KINDS.has(kind)) u -= f[2] * (0.55 + ca * 0.8 - ag * 0.45);
-  if (kind === PK.DEFEND) u += f[6] * (0.7 + ca * 0.4 + loy * 0.3);
+  // opportunity: a weakly held enemy objective is worth more the less it is defended
+  if (kind === PK.ATTACK || kind === PK.RAID || kind === PK.ASSAULT_CORE) u += (1 - f[2]) * (0.2 + ag * 0.35);
+  if (kind === PK.DEFEND) u += f[6] * (0.45 + ca * 0.3 + loy * 0.2);
   if (kind === PK.FORTIFY) u += f[6] * (0.3 + ca * 0.5);
   u -= f[3] * (0.25 + lo * 0.6);
-  if (kind === PK.RECON) u += f[4] * (0.5 + de * 0.4); else u -= f[4] * (ATTACK_KINDS.has(kind) ? 0.18 + ca * 0.4 : ca * 0.3);
+  if (kind === PK.RECON) u += f[4] * (0.5 + de * 0.4); else u -= f[4] * (ATTACK_KINDS.has(kind) ? 0.1 + ca * 0.25 : ca * 0.3);
   u -= f[5] * (0.25 + ca * 0.5);
   u += f[7] * 1.25;
   u += f[8] * (0.15 + loy * 0.45);
   u += f[9] * (0.25 + lo * 0.25);
   switch (kind) {
-    case PK.ATTACK: case PK.ASSAULT_CORE: u += ag * 0.45; break;
+    case PK.ATTACK: case PK.ASSAULT_CORE: u += ag * 0.55; break;
     case PK.RAID: case PK.SABOTAGE: u += de * 0.5 + ag * 0.1; break;
     case PK.SECURE_SUPPLY: case PK.REPAIR: u += lo * 0.5; break;
     case PK.FORTIFY: u += ca * 0.45; break;
@@ -333,7 +350,7 @@ function doctrineUtility(c: Commander, kind: number, f: number[], obs: Obs): num
     case PK.RECON: u += de * 0.25; break;
     case PK.REGROUP: u += ca * 0.15 + (obs.strength < 2 ? 0.6 : 0); break;
   }
-  if (kind === PK.ASSAULT_CORE && obs.strength < 8) u -= 0.5;
+  if (kind === PK.ASSAULT_CORE && obs.strength < 6) u -= 0.5;
   switch (c.role) {
     case 'quartermaster': if (kind === PK.SECURE_SUPPLY || kind === PK.REPAIR) u += 0.2; break;
     case 'defensive reserve': if (kind === PK.DEFEND || kind === PK.FORTIFY) u += 0.2; break;
@@ -369,7 +386,7 @@ export function runStrategic(w: World, c: Commander, trigger: string): void {
     cd.feats = features(w, c, obs, cd);
     cd.U = doctrineUtility(c, cd.kind, cd.feats, obs);
     // deconfliction: a same-faction commander already committed here (support plans excepted)
-    if (cd.kind !== PK.SUPPORT && cd.kind !== PK.REGROUP && cd.kind !== PK.DEFEND) {
+    if (cd.kind !== PK.SUPPORT && cd.kind !== PK.REGROUP) {
       for (const o of w.cmds) {
         if (o.id !== c.id && o.status === 'active' && o.faction === c.faction && o.plan && w.grid.dist(o.plan.tile, cd.tile) <= 3) { cd.U -= 0.3; break; }
       }
@@ -391,12 +408,13 @@ export function runStrategic(w: World, c: Commander, trigger: string): void {
   const [ag, ca] = [c.doctrine[0] / 100, c.doctrine[1] / 100];
   const posture = ag - ca > 0.2 ? 'AGGRESSIVE' : ca - ag > 0.15 ? 'CAUTIOUS' : 'BALANCED';
   const exposure = obs.coreThreat / (obs.coreThreat + 2);
-  const rv = ca * 0.5 + exposure * 0.5 - ag * 0.3;
-  const reserve = cd.kind === PK.REGROUP || cd.kind === PK.DEFEND ? 0 : rv < 0.15 ? 0 : rv < 0.33 ? 25 : 50;
+  const rv = ca * 0.35 + exposure * 0.5 - ag * 0.3;
+  const reserve = cd.kind === PK.REGROUP || cd.kind === PK.DEFEND ? 0 : rv < 0.18 ? 0 : rv < 0.38 ? 25 : 50;
   const did = `d-${String(++w.decisionCounter).padStart(5, '0')}`;
   c.plan = {
     kind: cd.kind, tile: cd.tile, struct: cd.struct, name: cd.name, posture, reserve, reason, started: w.tick,
     psi: psiOf(cd.kind, cd.feats), score: cd.score, decisionId: did, explored, base: snapshot(w, c), group: [], done: false,
+    pressure: cd.kind === PK.DEFEND ? cd.feats[6] : 1,
   };
   c.stats.plans++;
   c.rel.decisions++;
@@ -443,7 +461,7 @@ function snapshot(w: World, c: Commander): PlanBase {
   for (let t = 0; t < w.grid.n; t++) if (w.owner[t] === c.id) territory++;
   for (const s of w.squads) if (s.owner === c.id) { hp += s.hp / s.maxHp; if (w.factions[c.faction].inSupply[s.tile]) supplied++; }
   const op = w.ops.find((o) => o.roster.includes(c.id) && (o.status === 'Running' || o.status === 'Provisional'));
-  return { sites, territory, valueKilled: c.stats.valueKilled, valueLost: c.stats.valueLost, opScore: op ? op.scores[c.id] ?? 0 : 0, hp, supplied };
+  return { sites, territory, valueKilled: c.stats.valueKilled, valueLost: c.stats.valueLost, opScore: op ? op.scores[c.id] ?? 0 : 0, hp, supplied, power: c.power };
 }
 
 function goalAchieved(w: World, c: Commander, p: Plan): boolean {
@@ -476,21 +494,33 @@ function finishPlan(w: World, c: Commander): void {
   const cur = snapshot(w, c);
   const b = p.base;
   const achieved = goalAchieved(w, c, p);
-  const raw =
+  // gains are measured per 90 s of plan time so long plans are not credited for merely lasting longer
+  const dur = Math.max(0.6, (w.tick - p.started) / 450);
+  const gains =
     (cur.sites - b.sites) * 0.45 +
     (cur.territory - b.territory) / 35 +
     ((cur.valueKilled - b.valueKilled) - (cur.valueLost - b.valueLost)) / 450 +
     (cur.opScore - b.opScore) / 150 +
-    (achieved ? 0.5 : -0.1);
-  const reward = Math.tanh(raw);
+    // the commander's own world power, so the learner optimises what actually decides the war
+    (c.power - (b.power ?? c.power)) / 80;
+  // holding a site that was never under real pressure is not an achievement
+  const bonus = achieved ? 0.5 * (p.kind === PK.DEFEND ? Math.min(1, (p.pressure ?? 1) * 1.6) : 1) : -0.1;
+  const reward = Math.tanh(gains / dur + bonus);
   const rec = c.decisions.find((d) => d.id === p.decisionId);
   if (rec) rec.reward = Math.round(reward * 1000) / 1000;
   if (w.learning) {
-    const pred = dot(c.lw, p.psi);
-    const err = reward - pred;
-    for (let i = 0; i < PSI_DIM; i++) c.lw[i] = clamp(c.lw[i] + LEARN.rate * err * p.psi[i], -LEARN.clamp, LEARN.clamp);
+    const adv = reward - c.rewardEma;
+    const err = learnStep(c, p.psi, adv, 1);
+    // shared experience: every active commander of the faction replays the update at a fraction of the rate against
+    // its own baseline (accepted teammates at the full share), so a faction learns from all of its plans
+    const team = w.teams.find((t) => t.id === c.team);
+    for (const mate of w.cmds) {
+      if (mate.id === c.id || mate.status !== 'active' || mate.faction !== c.faction) continue;
+      const mateTeam = !!team && team.members.some((m) => m.accepted && m.id === mate.id);
+      learnStep(mate, p.psi, reward - mate.rewardEma, LEARN.teamShare * (mateTeam ? 1 : 0.6));
+    }
     c.errEma = c.errEma * 0.92 + Math.abs(err) * 0.08;
-    c.rewardEma = c.rewardEma * 0.92 + reward * 0.08;
+    c.rewardEma = c.rewardEma * (1 - LEARN.baselineRate) + reward * LEARN.baselineRate;
     c.updates++;
     if (c.updates % LEARN.versionEvery === 0) {
       const prev = policyLabel(c);
@@ -508,6 +538,16 @@ function finishPlan(w: World, c: Commander): void {
     remember(w, c, { kind: 'DANGER', tile: p.tile, subject: p.kind, value: Math.round(reward * 100) / 100, conf: Math.min(1, 0.4 + Math.abs(reward)), tick: w.tick, src: `${p.decisionId} failed` });
   }
   c.plan = null;
+}
+
+/** One LMS step of the value head toward an observed advantage; returns the prediction error. */
+function learnStep(c: Commander, psi: number[], adv: number, scale: number): number {
+  const err = adv - dot(c.lw, psi);
+  for (let i = 0; i < PSI_DIM; i++) {
+    const rate = (i < FEAT_COUNT ? LEARN.rate : LEARN.rateKind) * scale;
+    c.lw[i] = clamp(c.lw[i] + rate * err * psi[i], -LEARN.clamp, LEARN.clamp);
+  }
+  return err;
 }
 
 function topWeights(c: Commander): string {

@@ -202,9 +202,14 @@ export const FEAT_COUNT = FEATURES.length;
 export const PSI_DIM = FEAT_COUNT + PLAN_COUNT + 1;
 
 export const LEARN = {
-  rate: 0.09,
-  lambda: 0.85, // weight of learned correction in plan score
+  // The value head predicts a plan's ADVANTAGE (reward minus the commander's own running mean), so a constant
+  // bias cannot soak up the signal; plan-kind and bias terms learn faster than the bounded situation features.
+  rate: 0.04, // situation features
+  rateKind: 0.16, // plan-kind one-hot and bias
+  lambda: 1.0, // weight of the learned correction in the plan score
   clamp: 2.0,
+  baselineRate: 0.08, // running-mean reward baseline
+  teamShare: 0.4, // teammates replay each other's updates at this fraction of the rate (shared experience)
   versionEvery: 8, // online updates per policy minor version
   epsilon0: 0.22,
   epsilonMin: 0.04,

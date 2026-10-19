@@ -36,13 +36,15 @@ export interface DecisionRecord {
   explored: boolean; fallback: boolean; reward: number | null;
 }
 
-export interface PlanBase { sites: number; territory: number; valueKilled: number; valueLost: number; opScore: number; hp: number; supplied: number }
+export interface PlanBase { sites: number; territory: number; valueKilled: number; valueLost: number; opScore: number; hp: number; supplied: number; power?: number }
 
 export interface Plan {
   kind: number; tile: number; struct: number; name: string;
   posture: string; reserve: number; reason: string; started: number;
   psi: number[]; score: number; decisionId: string; explored: boolean;
   base: PlanBase; group: number[]; done: boolean;
+  /** Unanswered enemy pressure on the target when the plan began (0..1); scales a DEFEND plan's success bonus. */
+  pressure?: number;
 }
 
 export interface CmdStats {
