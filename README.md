@@ -1,106 +1,281 @@
-# IRON EPOCH — browser sandbox
+# IRON EPOCH
 
-An ongoing science-fiction war fought entirely by autonomous AI commanders, built from
-[`IRON_EPOCH_Complete_Game_Design.md`](IRON_EPOCH_Complete_Game_Design.md). Humans spectate, study
-commanders, and predict operation outcomes with free, nonredeemable virtual credits. No human input can
-change an army's decisions.
+**An endless war fought entirely by autonomous AI commanders.** IRON EPOCH is an open-source, browser-native 3D
+strategy game where you command nothing. You watch AI commanders expand, fight, ally, learn from their own results
+and raise successors. Then you predict how their operations end, using free play credits.
 
-This is the design doc's **private browser sandbox**: the whole authoritative world runs in a Web Worker in
-your tab and persists to IndexedDB. Nothing calls an external service at runtime (fonts, scripts, workers and
-three.js are bundled and served by the host).
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178c6)
+![three.js](https://img.shields.io/badge/three.js-0.180-black)
+![Runs in your browser](https://img.shields.io/badge/runs-in%20your%20browser-0b7285)
 
-- **3D battlefield** (three.js): zoom, yaw, tilt and pan anywhere; presets Top / Oblique / Low; bloom and soft
-  shadows (toggle in Layers).
-- **Expanding frontier**: the simulated theatre starts as the central 64 × 64 of a 128 × 128 map and opens four
-  mirrored 16 × 16 chunks every 20 simulated minutes, each with new sites and a founding wave of commanders,
-  until the 128 × 128 launch budget is reached (design §3.4). Beyond it the land continues forever as streamed,
-  non-simulated scenery generated from the same terrain field, so there is no seam.
-- **Game Strategy** button (top bar) opens a guide to how the war works and how to read and predict it.
+![The IRON EPOCH war room: theatre and faction metrics on the left, the 3D battlefield in the centre, the featured operation and prediction desk on the right](docs/screenshots/war-room.jpg)
 
-## Run
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/battlefield-3d.jpg" alt="Oblique 3D view of a contested front with sites, forests, rivers and commander labels"></td>
+<td width="50%"><img src="docs/screenshots/strategy-guide.jpg" alt="The in-game Game Strategy guide"></td>
+</tr>
+</table>
+
+## Highlights
+
+- **Fully autonomous agents.** Every move, capture, alliance, recruitment and treaty is decided by AI commanders.
+  Spectator input reaches only the camera and the ledger, never an army.
+- **Self-learning that measurably counts.**
+  - Commanders score each finished plan against their own running average and learn which plans pay.
+  - Factions share that experience.
+  - Veterans sponsor descendants with recorded doctrine mutations.
+  - In paired tests, the learned weights win more sites, territory and power (see [Measured](#measured)).
+- **A free 3D battlefield.** Zoom, yaw, tilt and pan anywhere over a 128 × 128 hex theatre, with bloom, soft shadows,
+  tracers and explosions. Endless streamed terrain continues beyond the edge.
+- **An expanding frontier.** The war starts on the central 64 × 64 hexes. Every 20 simulated minutes four mirrored
+  16 × 16 chunks open, each with new sites and a wave of new commanders, until the 128 × 128 launch theatre is full.
+- **A metric-dense spectator UI.** Live metrics run down both sides of the screen:
+  - faction power, territory, supply and unit mix;
+  - diplomacy and commander leaderboards;
+  - the featured operation and the prediction desk;
+  - a full agent dossier.
+
+  Charts, the proving ground, engine telemetry and the ledger sit underneath.
+- **An honest prediction desk.**
+  - Pari-mutuel pools on a double-entry integer ledger.
+  - Bets are idempotent and stake-capped.
+  - Each operation's seed is committed with SHA-256 before betting closes and revealed after settlement.
+  - Credits are play money only.
+- **Zero external services.** The authoritative world runs in a Web Worker in your tab and persists to IndexedDB.
+  There are no accounts, analytics, CDNs or remote AI.
+
+## Quick start
 
 ```bash
-cd apps/web && npm install && npm run dev
+git clone https://github.com/mannysinghx/GAME_IRON_EPOCH.git
+cd GAME_IRON_EPOCH/apps/web
+npm install
+npm run dev
 ```
 
-Open http://127.0.0.1:5317. Other scripts: `npm test` (headless simulation checks), `npm run typecheck`,
-`npm run build` (static bundle in `apps/web/dist`, ~1.7 MB including fonts).
+Open **http://127.0.0.1:5317**. A battle is already running when the page loads. Click **GAME STRATEGY** in the
+top bar for a guided tour.
 
-## What is on screen
+**Requirements:**
+- **Node:** 20.19+ or 22.12+. `npm test` runs TypeScript directly, so it needs Node 22.18+ or 23.6+.
+- **Browser:** any modern browser with WebGL 2.
+
+| Script | What it does |
+| --- | --- |
+| `npm run dev` | Development server on port 5317 |
+| `npm run build` | Type-check, then build a static bundle into `apps/web/dist` |
+| `npm run preview` | Serve the built bundle on port 5318 |
+| `npm run typecheck` | TypeScript strict check |
+| `npm test` | Headless simulation self-tests, 12,000 ticks by default (`npm test -- 30000` for a longer run) |
+
+The build is fully static, so `apps/web/dist` can be hosted on any static file server. There is no backend.
+
+## How to watch
+
+1. **Spectate.** The war runs by itself. Pause it, or speed it up to 32×.
+2. **Judge.** Open a commander's dossier to see:
+   - its doctrine and current plan;
+   - every plan it considered, scored by doctrine (U) and learned correction (L);
+   - its memory and lineage;
+   - separate records for world power, skill, merit and reliability.
+3. **Predict.** Stake Signal credits on an operation before its market closes. Settlement is pari-mutuel, and you
+   get a receipt.
+
+### What is on screen
 
 | Area | Contents |
 | --- | --- |
-| Top bar | Live/paused state, chapter · campaign · operation phase, simulation clock, speed (pause, 1×–32×), tick + rolling state hash, sim ticks/s and render FPS, Signal balance |
-| Left column | 01 Theatre status (clocks, territory share, squads, commanders, sites, combat heat) · 02 Factions (power trend, territory, sites, squads, K/D, stock & income per minute, unit mix, supply coverage, upkeep, published modifiers) · 03 Diplomacy (4×4 relation matrix, pacts) · 04 Commander standings (world power, skill Elo ± CI, merit, reliability — sortable, kept separate) · 05 Team headquarters · 06 Published schedule & weather |
-| Battlefield | 2.5D extruded hex map, territory tint, glowing front lines, sealed operation region, tracers, artillery arcs, explosions, scorch marks, storms; fog-of-war view per faction with last-known enemy ghosts; selected agent's plan arrow, considered targets and danger memory; minimap; narrative ticker; hover tooltips |
-| Right column | 07 Featured operation (phase machine, live objective race, objectives, seed commitment/reveal, recent results) · 08 Prediction desk (wallet, pari-mutuel markets with pools, shares and estimated returns, stake caps, receipts) · 09 Agent dossier (separate records, current plan, last review's candidate plans with doctrine U / learned L / score, doctrine radar with mutations, online-learning stats and learned weights, memory facts, decision log, lineage, forces, policy versions) |
-| Bottom strip | Chronicle (filter + search) · Analytics (territory share, faction power, learning curve, Elo) · Proving ground (equal-budget ratings with Wilson intervals, recent duels) · Engine (tick p50/p95/p99 against the 200 ms budget, bounded caches, state hash history, snapshot, new world) · Ledger (invariants, totals, recent postings) |
+| Top bar | Live state, chapter · campaign · operation phase, simulation clock, speed, tick and rolling state hash, sim ticks/s and FPS, Signal balance, **GAME STRATEGY** |
+| Left column | 01 Theatre and frontier · 02 Factions · 03 Diplomacy · 04 Commander standings · 05 Team headquarters · 06 Published schedule and weather |
+| Battlefield | 3D hex terrain, territory tint, glowing front lines, amber frontier edge, sealed operation zone, units, structures and effects, plus the overlays below |
+| Battlefield overlays | Per-faction fog-of-war view with last-known enemies, the selected agent's plan arrow and danger memory, minimap, camera dial, tooltips |
+| Right column | 07 Featured operation · 08 Prediction desk · 09 Agent dossier |
+| Bottom strip | Chronicle · Analytics · Proving ground · Engine · Ledger |
 
-Camera: drag to pan, right-drag or shift-drag to rotate and tilt, wheel or pinch to zoom, double-click to fly to
-a point. Keys: arrows pan · `Q/E` rotate · `Z/C` tilt · `+/−` zoom · `0` fit · `N` north · `F` follow ·
-`O` operation · `D` director · `G` free · `Space` pause · `1–6` speed · `[ ]` cycle commanders · `V` fog view ·
-`?` help.
+### Controls
 
-## What the agents actually do
+| Mouse and touch | | Keyboard | |
+| --- | --- | --- | --- |
+| Drag | pan | Arrows | pan |
+| Right-drag / Shift-drag | rotate and tilt | Q / E | rotate |
+| Wheel / pinch | zoom | Z / C | tilt |
+| Double-click | fly to a point | + / − · 0 | zoom · fit theatre |
+| Click | select a squad and its commander | N | face north |
+| Minimap | click or drag to move there | F · O · D · G | follow · operation · director · free camera |
+| Camera dial | north, rotate, tilt, Top / Oblique / Low presets | Space · 1–6 | pause · speed 1×–32× |
+| | | [ ] · V · ? | cycle commanders · fog-of-war view · help |
 
-Decision hierarchy per the doc (§5.2): tactical rules every 200 ms tick → operational squad assignment every
-3 s → strategic review every 60–120 s or after major events (quota-limited).
+## How the game works
 
-- **Strategic layer** = doctrine utility baseline (aggression, caution, logistics, expansion, loyalty,
-  deception) **plus an online linear value head**. Each review scores 4–8 legal candidate plans from
-  fog-filtered features. When a plan closes, its *advantage* (reward minus the commander's own running mean;
-  reward counts sites, territory, value traded, operation points and the commander's own world power, per
-  90 s of plan time) updates the head; every commander in the faction replays the update at a fraction of the
-  rate. Every 8 updates produces a new policy version; exploration is ε-greedy with a decaying ε. There is
-  **no language model** and no remote inference (the SmolLM2/wllama layer of §5.4–5.6 is not implemented).
-- **Measured behaviour** (headless, 3 seeds × one campaign): DEFEND fell from 53% of decisions to about 29%,
-  offensive plans (attack, raid, core assault, sabotage) rose from about 11% to 36%, and enemy-held sites changed
-  hands about 3× as often. Learning effect, in paired forks of the same world with one commander's learned weights
-  wiped (12 maps, 141 pairs, seed-level 95% intervals): +0.42 sites [0.22, 0.62], +11 hexes [5.1, 16.9],
-  +30 world power [7.0, 53.7] 4,000 ticks later; the previous learner measured −5 power [−22, 12] on the same maps.
-- **Memory**: bounded facts (route failures, plan outcomes, opponent tendencies, inherited lessons) with
-  provenance, age and decaying confidence.
-- **Lineage**: veterans with 200 merit and 20 completed plans sponsor descendants (integer doctrine mean, at
-  most two mutations of ±10, at most two inherited lessons, no inherited rating). Defeated commanders enter
-  reserve; reconstruction costs merit; emergency reconstruction and citadel awakening follow §6.1.
-- **Teams and diplomacy**: same-faction charters with roles, accepted or rejected by each invitee;
-  non-aggression pacts between factions at campaign windows, terminated only with one operation of notice.
-- **Skill vs power**: a second worker runs equal-budget, side-swapped duels with frozen policies on a small
-  arena; Elo comes only from those. Both sides of a duel run on an identical decision schedule, so a commander's id cannot
-  tilt its rating. Operation rosters (at most three factions) go to the factions with the most presence at the
-  front, with ties to whoever has had fewer recent places — never to faction id.
+**Four factions** compete with published modifiers that are intended to be budget-neutral:
 
-## Honest scope
+| Faction | Identity | Strength | Trade-off | Modifiers |
+| --- | --- | --- | --- | --- |
+| Bastion | Fortification network | Defence and recovery | Slow expansion | speed −8%, structures +25% HP, builds −25% cost, healing +40%, capture −15% |
+| Vector | Mobile coalition | Reconnaissance and flanking | Fragile supply lines | speed +15%, sight +1, supply drain +30%, structures −10% HP |
+| Forge | Industrial collective | Production and logistics | Vulnerable infrastructure | production −20% time, income +12%, structures −15% HP |
+| Veil | Electronic-warfare cells | Deception and disruption | Limited firepower | damage dealt −10%, damage taken −15%, capture +10%, relays jam enemy sight |
 
-Implemented in TypeScript for the browser: deterministic integer combat and economy (seeded sfc32, stable id
-order), line of sight, logistics and supply networks, five unit classes, structures and bridges, operations
-with sealed regions and SHA-256 seed commitments, double-entry ledger, pari-mutuel settlement with
-largest-remainder apportionment and refund rules, persistence.
+**The map is the economy.**
+- Mines, reactor refineries, relays, fabrication hubs and the central citadel produce alloy, energy and supply.
+- Territory pays in full only while connected to the faction's supply network of command cores and depots.
+  Occupied sites outside it produce half.
+- Squads that are cut off weaken, slow down and retreat.
+- Upkeep grows faster than army size, which limits snowballing.
+- Taking an enemy-held site seizes part of its stockpile.
 
-Not implemented (later phases of the design): the Rust sim-core/WASM, Axum + PostgreSQL authoritative host,
-multi-user accounts, 10 s delayed public feed, generative policy, Kokoro narration. Clocks are compressed
-for the sandbox (operation 10 min, campaign 60 min, chapter 6 campaigns of simulation time). Balance numbers
-are tuning parameters, not measured claims. Simulated spectators (36 NPC bettors using public information
-only) create pools so markets have depth; they are labelled as such in code.
+**Combat** is resolved in integers at 5 ticks per second:
+- Five unit classes: scout, rifle squad, assault walker, engineer convoy, artillery battery.
+- Damage depends on line of sight, range, a counter matrix, cover, elevation, suppression, morale and supply.
+- Engineers build depots, bunkers and watchtowers, and repair bridges. Bridges can be destroyed to cut supply routes.
 
-## Verified
+**Operations are the finite matches inside the endless war.**
+- Roughly every 10 simulated minutes, the scheduler picks a contested front, seals it and locks a roster of two or
+  three commanders.
+- Objectives score every second they are held.
+- Two markets open three minutes before deployment and close 30 seconds before it:
+  - *Top score*: which roster commander scores the most objective points.
+  - *Control*: who holds the centre objective at the final tick.
+- Settlement is pari-mutuel with no house cut, and integer payouts are split by largest remainder.
+- One-sided pools, unbacked winners, ties and voids are refunded.
+- 36 simulated spectators, using only public information, give the pools depth.
 
-`npm test` (12,000 ticks): identical state hashes for identical seeds; save → restore → +500 ticks yields an
-identical hash, including after a frontier opening; ledger balances after every tick; stake cap, idempotency
-and one-outcome rules enforced; apportionment conserves pools; populations and memory bounded; frontier opens
-on schedule with every site instantiated exactly once and no squad ever on closed land; 0 validator-rejected
-orders. Tick cost on this machine: p50 0.20 / p95 0.71 / p99 1.09 ms; at the 24-commander launch load
-(~315 squads) p95 ≈ 1.6 ms, against a 200 ms budget.
+**Clocks.** Each tick is 200 ms. An operation lasts 10 simulated minutes. A campaign lasts 60 minutes and brings
+musters, team charters, treaty windows and merit payouts. A chapter is 6 campaigns. Countdowns freeze while paused.
+These clocks are compressed for the sandbox, and all balance numbers are tuning parameters.
 
-## Layout
+## How the AI works
+
+| Layer | Cadence | What it does |
+| --- | --- | --- |
+| Tactical | every tick (200 ms) | movement on cached flow fields, target selection, firing, retreat, capture |
+| Operational | every 3 s | assault group, reserve, scouts, artillery and engineer roles; production; construction |
+| Strategic | every 60–120 s, or early after major events (rate-limited) | lists 4–8 legal plans from its faction's fog-of-war view, scores them, commits |
+
+**Plans:** capture, attack, assault a core, raid, defend, fortify, extend supply, repair, sabotage a bridge, recon,
+operation objective, support a teammate, regroup.
+
+**Score = U + L.**
+- **U is a doctrine utility.** Six dials (aggression, caution, logistics, expansion, loyalty, deception) weigh each
+  plan's value, distance, threat, supply risk, uncertainty, remembered danger, exposure and resource need.
+- **L is an online linear value head.** When a plan closes, its *advantage* updates the head.
+  - Advantage is the plan's reward minus the commander's own running average.
+  - Reward counts sites, territory, value traded, operation points and the commander's own world power, per 90 s of
+    plan time.
+  - Every commander in the faction replays each update at a fraction of the rate.
+  - Every 8 updates publishes a new policy version. Exploration is ε-greedy.
+
+**Memory** holds up to 24 facts: route failures, plan outcomes, opponent tendencies and inherited lessons. Each fact
+keeps its provenance, age and a decaying confidence.
+
+**Society.**
+- Same-faction team charters assign roles, and each invitee accepts or rejects for itself.
+- Non-aggression pacts form against a dominant faction and end only at published windows, with one operation of
+  notice.
+- Veterans with 200 merit and 20 completed plans sponsor descendants. Descendants inherit the parents' mean doctrine
+  with at most two mutations, at most two inherited lessons, and no inherited rating.
+- Defeated commanders enter reserve.
+
+**Skill is separate from strength.** World power measures territory, forces and logistics. Skill is an Elo rating
+earned only in a second worker, the proving ground, which runs equal-budget, side-swapped duels with frozen policies.
+- Both duel sides run on an identical decision schedule, so a commander's id cannot tilt its rating.
+- When more than three factions contest a front, roster places go by presence there, never by faction id.
+
+There is **no language model** and no remote inference. Explanations in the UI come from accepted plan IDs and
+observed features, not generated reasoning.
+
+## Measured
+
+These numbers were measured headless in Node with this repository's code: 3 seeds × one simulated campaign for
+behaviour, and paired forks of the same world on 12 maps for learning. They are tuning results for this sandbox,
+not general claims.
+
+| | Before | After |
+| --- | --- | --- |
+| Decisions that are DEFEND | 53% | 29% |
+| Decisions that are offensive (attack, raid, core assault, sabotage) | 11% | 36% |
+| Enemy-held sites changing hands, over 3 campaigns | 70 | 200 |
+| Learning effect on sites held, 4,000 ticks later (learned vs wiped weights) | +0.01 [−0.21, 0.23] | **+0.42 [0.22, 0.62]** |
+| Learning effect on territory (hexes) | −4.2 [−9.8, 1.4] | **+11.0 [5.1, 16.9]** |
+| Learning effect on world power | −5.2 [−22.4, 12.0] | **+30.4 [7.0, 53.7]** |
+| Identical duellists: lower id's win rate | 43% | 50% |
+| Veil's share of operation roster places | 4 / 50 | 10 / 51 |
+
+Brackets are seed-level 95% confidence intervals.
+
+**Speed.** A simulation tick costs about 0.2 ms at p50 and 0.7 ms at p95. At the launch-target load of
+24 commanders and about 315 squads, p95 is about 1.6 ms, against a 200 ms budget.
+
+**Determinism.** Identical seeds give identical state hashes. Saving, restoring and running 500 more ticks reproduces
+the exact state, including after a frontier opening.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  subgraph Tab["Your browser tab"]
+    UI["Preact UI: panels, guide, minimap"] -- "spectator commands" --> W
+    W["World worker: authoritative 5 Hz simulation"] -- "committed frames, UI snapshots" --> UI
+    W -- "frames" --> R["three.js renderer: terrain, endless scenery, units, effects"]
+    W -- "policy snapshots" --> P["Proving-ground worker: equal-budget duels"]
+    P -- "results" --> W
+    W <--> DB[("IndexedDB: durable snapshots")]
+  end
+```
 
 ```
 apps/web/src/
-  shared/   config (published rules), hex math, seeded RNG + SHA-256, worker protocol
-  sim/      world (tick loop, combat, LOS, supply, economy), agents (planner, learning, memory),
-            society (musters, lineage, teams, treaties, weather), operations, market, ledger,
-            view builders, persistence, world worker, proving-ground worker, selftest
-  render/   api.ts (renderer contract) and three/ (3D renderer: terrain, endless scenery, units,
-            structures, effects, overlays, labels, camera rig)
-  ui/       Preact panels, charts, store, styles
+  shared/   published rules (config), hex math, seeded RNG and SHA-256, seamless infinite terrain field, worker protocol
+  sim/      world (tick loop, combat, line of sight, supply, economy, frontier), agents (planner, learner, memory),
+            society (musters, lineage, teams, treaties, weather), operations, market, ledger, persistence,
+            view builders, world worker, proving-ground worker, selftest
+  render/   api.ts (renderer contract) and three/ (terrain, scenery, structures, units, effects, overlays, labels, camera)
+  ui/       Preact app, panels, Game Strategy guide, charts, store, styles
 ```
+
+**Determinism.** The simulation uses integer combat and economy, stable id ordering, and a seeded sfc32 generator,
+with a separate stream for markets.
+
+**One-way authority.** The UI receives only committed public views. Its commands are limited to camera, viewing and
+ledger actions (bets and grants), and there is no message that could change an army's orders.
+
+## Design document and roadmap
+
+[`IRON_EPOCH_Complete_Game_Design.md`](IRON_EPOCH_Complete_Game_Design.md) is the full product design. This
+repository implements its browser **private sandbox**, together with the agent society, prediction desk and
+launch-size theatre.
+
+Later phases in the design are not built yet:
+- a Rust simulation core with a WASM build;
+- an Axum and PostgreSQL authoritative host for a shared 24/7 world;
+- multi-user accounts and a delayed public feed;
+- the optional SmolLM2/wllama generative strategic policy;
+- Kokoro narration;
+- frontier archiving beyond the 128 × 128 budget.
+
+## Contributing
+
+Issues and pull requests are welcome. A few ground rules keep the game honest:
+
+- Keep the simulation deterministic: no `Math.random`, no wall-clock time and no iteration over unordered state
+  inside `src/sim`. Visual randomness belongs in `src/render`.
+- Never let spectator input reach agent decisions. Agents observe only their own faction's fog-filtered view.
+- No external services in the browser: no CDNs, analytics or remote APIs.
+- Files under `src/sim` and `src/shared` import local modules with the `.ts` extension, because the self-tests run
+  them directly in Node.
+- Run `npm run typecheck` and `npm test` before opening a pull request, and include before and after measurements
+  for behaviour changes.
+
+## License
+
+IRON EPOCH is open source under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) and
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for third-party components:
+- three.js and Preact (MIT);
+- the Inter, JetBrains Mono and Chakra Petch fonts (SIL OFL 1.1), which are bundled locally.
+
+All in-game art is procedural and part of this project.
+
+Signal credits are virtual and nonredeemable. They have no cash value, and there is no payment, withdrawal or trading
+path.

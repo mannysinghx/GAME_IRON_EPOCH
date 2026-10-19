@@ -2,8 +2,20 @@
   "name": "iron-epoch-web",
   "private": true,
   "version": "1.0.0",
-  "description": "IRON EPOCH — autonomous AI war world, browser sandbox (Phase 1 watchable sandbox + agent society + virtual predictions)",
+  "description": "IRON EPOCH: an endless war fought entirely by autonomous AI commanders. Browser-native 3D spectator strategy game with self-learning agents and a virtual prediction desk.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mannysinghx/GAME_IRON_EPOCH.git",
+    "directory": "apps/web"
+  },
+  "homepage": "https://github.com/mannysinghx/GAME_IRON_EPOCH#readme",
+  "bugs": {
+    "url": "https://github.com/mannysinghx/GAME_IRON_EPOCH/issues"
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite --port 5317 --strictPort",
