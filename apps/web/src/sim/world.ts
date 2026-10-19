@@ -426,8 +426,10 @@ export class World {
       : kind === 'founding' ? [U.RIFLE, U.RIFLE, U.RIFLE, U.SCOUT, U.ENGINEER, U.WALKER] : [U.RIFLE, U.RIFLE, U.RIFLE, U.SCOUT, U.ENGINEER];
     for (const cls of starter) this.spawnSquad(c, cls, tile);
     c.res = kind === 'duel' ? { alloy: 400, energy: 200, supply: 200 } : { alloy: 300, energy: 160, supply: 160 };
-    c.nextStrategic = this.tick + 5 + (c.id % 7);
-    c.nextOperational = this.tick + 2 + (c.id % 5);
+    // duels start both sides on the same schedule (no id-driven timing); the world staggers commanders
+    const duel = this.mode === 'duel';
+    c.nextStrategic = this.tick + 5 + (duel ? 0 : c.id % 7);
+    c.nextOperational = this.tick + 2 + (duel ? 0 : c.id % 5);
     this.territoryDirty = true;
   }
 

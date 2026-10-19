@@ -36,7 +36,7 @@ export function serialize(w: World): string {
     ...f, lastSeen: enc(f.lastSeen), knownOwner: enc(f.knownOwner), visible: enc(f.visible), inSupply: enc(f.inSupply), supplyDist: enc(f.supplyDist),
   }));
   const data = {
-    v: SAVE_VERSION, seed: w.seed, tick: w.tick, nextId: w.nextId, nextCmdId: w.nextCmdId,
+    v: SAVE_VERSION, fairRatings: 1, seed: w.seed, tick: w.tick, nextId: w.nextId, nextCmdId: w.nextCmdId,
     rng: w.rng.state(), marketRng: w.marketRng.state(),
     owner: enc(w.owner), capCmd: enc(w.capCmd), capProg: enc(w.capProg), decay: enc(w.decay), occupancy: enc(w.occupancy),
     // frontier: which chunks are open; their structures are in `structs`, the remaining specs regenerate from the seed
@@ -121,6 +121,12 @@ export function deserialize(text: string): World | null {
   w.supplyDirty = true;
   w.rebuildBuckets();
   w.log('chapter', `World resumed from durable snapshot at tick ${w.tick}. Countdowns were frozen while the host was away.`, -1, [], -1);
+  // snapshots from before the duel-timing fix carry skill ratings biased by commander id: start them over
+  if (!d.fairRatings) {
+    for (const c of w.cmds) { c.elo = 1200; c.evalGames = 0; c.evalWins = 0; c.evalDraws = 0; c.hist.elo = []; }
+    w.evals = [];
+    w.log('eval', 'Skill ratings reset: earlier proving-ground duels gave the lower-id commander a timing edge. All commanders restart at 1200 with no games (provisional).', -1, [], -1);
+  }
   return w;
 }
 

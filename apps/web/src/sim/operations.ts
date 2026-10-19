@@ -69,6 +69,21 @@ export function tickOperations(w: World): void {
 /** Sealed region: open tiles within `radius`; closed frontier tiles take no part in an operation. */
 function regionTiles(w: World, center: number, radius: number): number[] { return w.grid.within(center, radius).filter((t) => w.active[t] === 1); }
 
+export interface RosterEntry { faction: number; cmdId: number; presence: number }
+
+/**
+ * Fair roster: when more than three factions are present at a front, keep the three with the most presence there
+ * (owned tiles in the region + 3 x squads within 12). Ties go to the faction with fewer roster places in recent
+ * operations, then to a hash that rotates with the operation number — never to faction or commander id.
+ */
+export function pickRoster(entries: RosterEntry[], recentPlaces: number[], opNumber: number): number[] {
+  const ranked = entries.slice().sort((a, b) =>
+    b.presence - a.presence ||
+    (recentPlaces[a.faction] ?? 0) - (recentPlaces[b.faction] ?? 0) ||
+    hashStr(`roster:${opNumber}:${a.faction}`) - hashStr(`roster:${opNumber}:${b.faction}`));
+  return ranked.slice(0, 3).map((e) => e.cmdId);
+}
+
 function createOperation(w: World, startTick: number): void {
   const g = w.grid;
   const recent = w.ops.slice(-3).map((o) => o.center);
@@ -93,8 +108,9 @@ function createOperation(w: World, startTick: number): void {
   if (best < 0) return;
   const radius = 6;
   const region = regionTiles(w, best, radius);
-  // roster: per faction present, the active commander with the most nearby forces (stable ties)
-  const roster: number[] = [];
+  // roster: per faction present, the active commander with the most nearby forces (stable ties); at most three
+  // factions, chosen by presence at this front — never by faction id (see pickRoster)
+  const entries: RosterEntry[] = [];
   for (let f = 0; f < 4; f++) {
     const owned = region.filter((t) => w.ownerF[t] === f).length;
     const nearSquads = w.squads.filter((s) => s.faction === f && g.dist(s.tile, best) <= 12).length;
@@ -104,10 +120,12 @@ function createOperation(w: World, startTick: number): void {
     const pick = cand
       .map((c) => ({ c, n: w.squads.filter((s) => s.owner === c.id && g.dist(s.tile, best) <= 14).length, d: g.dist(c.homeTile, best) }))
       .sort((a, b) => b.n - a.n || a.d - b.d || a.c.id - b.c.id)[0];
-    roster.push(pick.c.id);
+    entries.push({ faction: f, cmdId: pick.c.id, presence: owned + nearSquads * 3 });
   }
+  const recentPlaces = [0, 0, 0, 0];
+  for (const o of w.ops.slice(-8)) for (const id of o.roster) { const rf = w.cmdById.get(id)?.faction ?? -1; if (rf >= 0) recentPlaces[rf]++; }
+  const roster = pickRoster(entries, recentPlaces, w.opCounter + 1);
   if (roster.length < 2) return;
-  if (roster.length > 3) roster.length = 3;
   // objectives: the centre plus up to two other sites in the region, else control points
   const objectives: OpObjective[] = [{ tile: best, name: bestName, points: 3, holder: -1 }];
   for (const st of w.structs) {

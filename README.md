@@ -66,7 +66,9 @@ Decision hierarchy per the doc (§5.2): tactical rules every 200 ms tick → ope
 - **Teams and diplomacy**: same-faction charters with roles, accepted or rejected by each invitee;
   non-aggression pacts between factions at campaign windows, terminated only with one operation of notice.
 - **Skill vs power**: a second worker runs equal-budget, side-swapped duels with frozen policies on a small
-  arena; Elo comes only from those.
+  arena; Elo comes only from those. Both sides of a duel run on an identical decision schedule, so a commander's id cannot
+  tilt its rating. Operation rosters (at most three factions) go to the factions with the most presence at the
+  front, with ties to whoever has had fewer recent places — never to faction id.
 
 ## Honest scope
 

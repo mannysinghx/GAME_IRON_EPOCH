@@ -7,7 +7,7 @@ declare const process: { argv: string[]; exit(code: number): never };
 import { CLOCK, FACTIONS, FRONTIER, MAP_H, MAP_W, POP, PSI_DIM, S, STRUCTS } from '../shared/config.ts';
 import { hashStr, hex32 } from '../shared/rng.ts';
 import { World } from './world.ts';
-import { apportion } from './operations.ts';
+import { apportion, pickRoster } from './operations.ts';
 import { placeBet, claimGrant } from './market.ts';
 import { deserialize, serialize } from './persist.ts';
 import { makeCommander } from './agents.ts';
@@ -266,6 +266,37 @@ check('no live updates of hidden enemies in faction memory', leak === 0);
   check('24 commanders deploy on the open theatre', nAct === POP.ACTIVE_MAX, `${nAct}`);
   check('load test: ledger balanced, no squad on closed land', fw.ledger.balanced() && loadClosed === 0);
   check('tick p95 under 5 ms at 128 x 128 with 24 commanders (Node)', p95(loadMs) < 5, `${p95(loadMs).toFixed(2)} ms`);
+}
+
+// ---- fairness: operation rosters never favour a faction by id
+{
+  const all = [0, 1, 2, 3].map((f) => ({ faction: f, cmdId: 10 + f, presence: 10 }));
+  const counts = [0, 0, 0, 0];
+  const recent = [0, 0, 0, 0];
+  for (let op = 1; op <= 40; op++) {
+    const r = pickRoster(all, recent, op);
+    for (const id of r) { counts[id - 10]++; recent[id - 10]++; }
+    for (let f = 0; f < 4; f++) recent[f] = Math.max(0, recent[f] - 0.75); // ~8-operation memory
+  }
+  check('roster: equal presence rotates fairly across all four factions', Math.max(...counts) - Math.min(...counts) <= 2, `places ${counts.join('/')} over 40 operations`);
+  const veilStrong = pickRoster([{ faction: 0, cmdId: 1, presence: 5 }, { faction: 1, cmdId: 2, presence: 6 }, { faction: 2, cmdId: 3, presence: 4 }, { faction: 3, cmdId: 4, presence: 20 }], [0, 0, 0, 0], 7);
+  check('roster: the faction with most presence at the front is always included', veilStrong.includes(4) && !veilStrong.includes(3), `roster ${veilStrong.join(',')}`);
+}
+
+// ---- fairness: a commander's id has no effect on an equal-budget duel
+{
+  const zero = new Array(PSI_DIM).fill(0);
+  const play = (idA: number, idB: number, seed: number) => {
+    const w = new World('duel', seed, { a: { id: idA, name: 'A', doctrine: [50, 50, 50, 50, 50, 50], weights: zero, policy: 'v1.0' }, b: { id: idB, name: 'B', doctrine: [60, 40, 50, 55, 50, 45], weights: zero, policy: 'v1.0' } });
+    w.learning = false;
+    for (let t = 0; t < 1200; t++) w.step();
+    const sc = w.ops[0]?.scores ?? {};
+    return `${sc[idA] ?? 0}:${sc[idB] ?? 0}:${w.cmds.map((c) => c.stats.kills).join(',')}`;
+  };
+  let same = 0;
+  const seeds = [11, 12, 13, 14, 15, 16];
+  for (const sd of seeds) if (play(1, 2, sd) === play(7, 3, sd)) same++;
+  check('duel: swapping only commander ids leaves every game identical', same === seeds.length, `${same}/${seeds.length} identical`);
 }
 
 console.log(failures ? `\n${failures} check(s) failed` : '\nall checks passed');

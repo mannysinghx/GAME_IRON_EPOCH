@@ -425,7 +425,11 @@ export function runStrategic(w: World, c: Commander, trigger: string): void {
   });
   if (c.decisions.length > DECISION_LOG) c.decisions.length = DECISION_LOG;
   c.lastReview = w.tick;
-  c.nextStrategic = w.tick + CLOCK.STRATEGIC_MIN + ((c.id * 97 + c.stats.plans * 31) % (CLOCK.STRATEGIC_MAX - CLOCK.STRATEGIC_MIN));
+  // the world staggers reviews by commander so the load spreads; duels give both sides the identical schedule so a
+  // commander's id cannot tilt an equal-budget skill rating
+  const span = CLOCK.STRATEGIC_MAX - CLOCK.STRATEGIC_MIN;
+  const jitter = w.mode === 'duel' ? (c.stats.plans * 131) % span : (c.id * 97 + c.stats.plans * 31) % span;
+  c.nextStrategic = w.tick + CLOCK.STRATEGIC_MIN + jitter;
   // memory maintenance per review
   for (const m of c.memory) m.conf = Math.max(0, m.conf - (m.kind === 'LESSON' ? 0.01 : 0.035));
   c.memory = c.memory.filter((m) => m.conf >= 0.1);
